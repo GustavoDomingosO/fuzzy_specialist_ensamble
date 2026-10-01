@@ -11,10 +11,6 @@ import numpy as np
 
 # ==========================================
 # Default hyperparameters
-# ------------------------------------------
-# Centralized here (and re-exposed as constructor args below) so that
-# trying a variation of the model means instantiating it with different
-# kwargs, not hunting through method bodies for the number to change.
 # ==========================================
 
 DEFAULT_FUZZY_M = 2                    # Fuzzy clustering fuzziness exponent
@@ -28,7 +24,7 @@ DEFAULT_MIN_SAMPLES = 10               # Minimum samples per bootstrap subsample
 
 
 # ==========================================
-# 1. Main Fuzzy Classifier Pipeline
+# Main Fuzzy Classifier Pipeline
 # ==========================================
 class FuzzyEspecialistEnsembleClassifier(BaseEstimator, ClassifierMixin):
     """
@@ -44,22 +40,15 @@ class FuzzyEspecialistEnsembleClassifier(BaseEstimator, ClassifierMixin):
        a proporção ideal por cluster então puxamos aleatoriamente usando os
        graus de pertinências como pesos, mas respeitando a proporção
        calculada. Fazemos isso 100/k.
-    6. Treinamos *100/k* modelos para cada subsample resultando em 100
+    5. Treinamos *100/k* modelos para cada subsample resultando em 100
        modelos.
-    7. Para a fusão de modelos, fazemos um *soft voting com pesos, em que o
+    6. Para a fusão de modelos, fazemos um *soft voting com pesos, em que o
        peso é equivalente ao inverso do quadrado da distância do novo ponto
        a cada cluster.* Detalhe que nós checamos se algum modelo não foi
        treinado (cluster vazio) e pulamos ele na predição.
 
     Stateful: maintains trained models, scalers, and imputers between fit
     and predict.
-
-    Subclassing hooks:
-        - `_fit_fuzzy_clustering`: swap the fuzzy clustering algorithm itself
-          (used both for k-selection and for the final clustering step).
-        - `_find_best_k_heuristic` / `get_best_k`: change how k is chosen.
-        - `_train_classifiers`: change the per-cluster base classifier.
-        - `predict_proba`: change the fusion/voting rule.
     """
 
     def __init__(
@@ -78,7 +67,7 @@ class FuzzyEspecialistEnsembleClassifier(BaseEstimator, ClassifierMixin):
     ):
         # NOTE: per sklearn's BaseEstimator convention, __init__ does nothing
         # but store constructor arguments verbatim (no derived state, no
-        # validation) — that's what makes get_params/set_params/clone work
+        # validation) that's what makes get_params/set_params/clone work
         # correctly with GridSearchCV, cross_validate, etc. All fit-time
         # state is created in fit() via _reset_state() instead.
         self.detailed_logs = detailed_logs
@@ -97,7 +86,7 @@ class FuzzyEspecialistEnsembleClassifier(BaseEstimator, ClassifierMixin):
     def _reset_state(self):
         """
         (Re)initializes all fit-time state. Called at the start of fit()
-        only (not from __init__ — see the note there), so a single instance
+        only (refer to the note there), so a single instance
         can be reused across cross-validation folds without leaking state
         from a previous fold, and so an unfitted instance has no fit-time
         attributes at all (the convention sklearn's check_is_fitted relies on).
@@ -119,6 +108,15 @@ class FuzzyEspecialistEnsembleClassifier(BaseEstimator, ClassifierMixin):
     # -------------------------------------------------------------------------
     # Optimization Logic (Finding K)
     # -------------------------------------------------------------------------
+    @staticmethod
+    def _metric_usable(df_results, metric):
+        """
+        True if `metric` is a column with at least one real value. A metric can
+        be NaN for every k; idxmax/idxmin raise on an all-NaN column, so such
+        metrics simply don't vote.
+        """
+        return metric in df_results.columns and df_results[metric].notna().any()
+
     def _find_best_k_heuristic(self, df_results):
         """Analyzes metrics DataFrame to suggest optimal k."""
         if df_results.empty:
@@ -130,19 +128,19 @@ class FuzzyEspecialistEnsembleClassifier(BaseEstimator, ClassifierMixin):
         # MAXIMIZE metrics
         max_metrics = ['Silhouette', 'Calinski_Harabasz', 'Dunn', 'FPC', 'MPC']
         for metric in max_metrics:
-            if metric in df_results.columns:
+            if self._metric_usable(df_results, metric):
                 best_k = df_results.loc[df_results[metric].idxmax()]['k']
                 recommendations[metric] = int(best_k)
 
         # MINIMIZE metrics
         min_metrics = ['Davies_Bouldin', 'FPE', 'Xie_Beni', 'Fukuyama_Sugeno']
         for metric in min_metrics:
-            if metric in df_results.columns:
+            if self._metric_usable(df_results, metric):
                 best_k = df_results.loc[df_results[metric].idxmin()]['k']
                 recommendations[metric] = int(best_k)
 
         # ELBOW Method
-        if 'Distortion' in df_results.columns:
+        if self._metric_usable(df_results, 'Distortion'):
             x = df_results['k'].values
             y = df_results['Distortion'].values
             p1 = np.array([x[0], y[0]])
@@ -181,6 +179,10 @@ class FuzzyEspecialistEnsembleClassifier(BaseEstimator, ClassifierMixin):
             return fallback
 
     def get_best_k(self, X_train_processed):
+        # skfuzzy's cmeans (init=None) and the metrics draw from numpy's global RNG.
+        # Seed it here so the k sweep is reproducible (run_fuzzy_clustering only
+        # seeds later, after k is already chosen).
+        np.random.seed(self.random_state)
         X_train_values = np.asarray(X_train_processed)
         X_train_T = X_train_values.T
 
@@ -195,7 +197,7 @@ class FuzzyEspecialistEnsembleClassifier(BaseEstimator, ClassifierMixin):
                 print(f"An error occurred for k={k}: {e}")
 
         df_results = pd.DataFrame(results)
-        self.k_optimization_results = df_results  # Store for plotting
+        self.k_optimization_results = df_results
         return self._find_best_k_heuristic(df_results)
 
     # -------------------------------------------------------------------------
@@ -205,11 +207,7 @@ class FuzzyEspecialistEnsembleClassifier(BaseEstimator, ClassifierMixin):
         """
         Runs the fuzzy clustering algorithm itself (currently fuzzy c-means).
 
-        Isolated on purpose: both `get_best_k` (evaluating candidate k values)
-        and `run_fuzzy_clustering` (the final clustering used for training)
-        call through here. To try a different fuzzy clustering algorithm
-        (Gustafson-Kessel, fuzzy GMM, possibilistic c-means, ...), override
-        only this method, keeping the same return contract:
+        Return contract:
 
             X_T: ndarray, shape (n_features, n_samples) — features x samples,
                  matching skfuzzy's convention.
@@ -218,7 +216,7 @@ class FuzzyEspecialistEnsembleClassifier(BaseEstimator, ClassifierMixin):
                 membership: ndarray, shape (k, n_samples)
 
         `m`, `error`, `max_iter` are named for fuzzy c-means specifically; a
-        different algorithm's override is free to reinterpret or ignore them.
+        different algorithm's override should reinterpret or ignore them.
         """
         m = self.fuzzy_m if m is None else m
         error = self.fuzzy_error if error is None else error
@@ -263,7 +261,6 @@ class FuzzyEspecialistEnsembleClassifier(BaseEstimator, ClassifierMixin):
         cluster_datasets = {}
         target_list = X_clustering['target']
 
-        # Move this loop to the outside so 'n' naturally acts as our variance factor
         for n in range(num_subsamples // k):
 
             # Generate a unique seed for this specific iteration sequence
@@ -353,8 +350,6 @@ class FuzzyEspecialistEnsembleClassifier(BaseEstimator, ClassifierMixin):
         3. Create Sub-Datasets (Weighted + Balanced)
         4. Train Ensemble
         """
-        # Reset state so old cross-validation folds don't leak, and so this
-        # instance carries no fit-time attributes until fit() actually runs.
         self._reset_state()
 
         if hasattr(X_train, 'columns'):
@@ -394,8 +389,7 @@ class FuzzyEspecialistEnsembleClassifier(BaseEstimator, ClassifierMixin):
 
     def predict_proba(self, X_test):
         """Inference using Weighted Soft Voting based on cluster proximity."""
-        # Raises sklearn's NotFittedError if fit() hasn't been called yet
-        # (classes_ only exists on the instance once _reset_state()/fit() ran).
+
         check_is_fitted(self, attributes=["classes_"])
         if not self.models:
             raise RuntimeError("Models not trained.")
@@ -414,7 +408,7 @@ class FuzzyEspecialistEnsembleClassifier(BaseEstimator, ClassifierMixin):
         distances = cdist(X_test_proc, self.cluster_centers, metric='euclidean')
 
         # Convert distances to weights (Squared Inverse Distance Weighting)
-        # We add a tiny epsilon to avoid division by zero if a point sits on a center
+        # Adding a tiny epsilon to avoid division by zero if a point sits on a center
         weights = 1.0 / (distances + 1e-9) ** 2
 
         # Normalize weights so they sum to 1 for each sample
@@ -504,7 +498,7 @@ class FuzzyEspecialistEnsembleClassifier(BaseEstimator, ClassifierMixin):
         probs = self.predict_proba(X_test)
 
         try:
-            # Handle Binary vs Multiclass properly
+            # Handle Binary vs Multiclass
             if probs.shape[1] == 2:
                 # Binary classification: pass only the probabilities of the positive class
                 auc = roc_auc_score(y_true, probs[:, 1])
@@ -515,10 +509,9 @@ class FuzzyEspecialistEnsembleClassifier(BaseEstimator, ClassifierMixin):
                 auc = roc_auc_score(y_true, probs, multi_class='ovr', labels=labels)
 
         except ValueError as e:
-            # Print the error so you aren't flying blind if it fails
             print(f" AUC Warning in this fold: {e}")
 
-            # If it's truly a 1-class fold, AUC remains mathematically impossible.
+            # If it's 1-class fold, AUC remains mathematically impossible.
             auc = np.nan
 
         return acc, auc
