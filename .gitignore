@@ -2,7 +2,8 @@
 data/
 next_steps.txt
 mlflow.db
-
+outputs/
+changes.txt
 
 
 
