@@ -9,6 +9,7 @@ description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
+    "matplotlib>=3.11.2",
     "mlflow>=3.16.0",
     "numpy>=2.5.3",
     "pandas>=3.0.5",
@@ -16,6 +17,7 @@ dependencies = [
     "scikit-fuzzy>=0.5.0",
     "scikit-learn>=1.9.1",
     "scipy>=1.18.1",
+    "seaborn>=0.13.2",
 ]
 
 [tool.uv.build-backend]
