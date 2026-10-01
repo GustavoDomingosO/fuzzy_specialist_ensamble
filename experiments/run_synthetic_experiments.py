@@ -1,44 +1,19 @@
 """
-Non-interactive synthetic-data experiment runner.
+Synthetic-data experiment runner.
 
-Replaces the exploratory Streamlit app (interactive_make_classification_full.py)
-for systematic comparisons: instead of sliders, each experiment is a YAML file
-under `tests/` describing a `sklearn.datasets.make_classification` dataset (the
-same variables the interactive app's sidebar exposed -- n_samples, n_features,
-n_informative, n_redundant, n_clusters_per_class, class_sep, flip_y, n_classes,
-weights, random_state), an optional `augmentation` section (skew, outliers,
-scale -- see below), a k-fold CV setup, and which registered models to run.
+Each experiment is a YAML file under `tests/` describing a `sklearn.datasets.make_classification` dataset.
 Results are written to `outputs/<experiment_name>/<run_timestamp>/`.
 
-The optional `augmentation` section ports the interactive app's skew/outlier
-/scale controls 1:1:
-    augmentation:
-      skew_factor: 0.0      # 0 = off. X -> exp(X * skew_factor) when > 0.
-      outlier_ratio: 0.0    # 0 = off. Fraction of rows scaled by a random
-                            # 5x-10x factor when > 0.
-      scale_factor: 1.0     # 1.0 = off. Uniform multiplier on X when > 1.0.
-      partial_scale: false  # If true, scale_factor only applies to the
-                            # first 2 features instead of the whole dataset.
-Omit the whole section (as in the plain example config) to skip it entirely.
+Metrics for now only computes what was asked for -- accuracy
+(mean/std over the folds), and time to train/inference (mean/std over
+the folds).
 
-NOTE (scope): only the "Dataset parameters" section of the interactive app,
-plus its skew/outlier/scale controls, were carried over here. The "Regras que
-mudam por região" (spatial rule change) control was deliberately left out.
-
-NOTE (metrics): for now this only computes what was asked for -- accuracy
-(mean/std over the folds), and wall-clock train/inference time (mean/std over
-the folds). AUC and G-mean (used by the old interactive app) are not computed
-here; that's a deliberate scope cut, not an oversight.
-
-NOTE (MLflow): each experiment run is also logged to MLflow (parent run per
-experiment, one nested child run per model), using the same
-sqlite:///mlflow.db backend already set up for debug_experiment_iris.py, under
-a separate experiment name ("fuzzy_ensemble_experiments") so sweep runs don't
-mix with debug runs. This is additive to the CSV output, not a replacement for
-it -- set `mlflow: false` in a config to skip it for that experiment.
+Each experiment run is also logged to MLflow, under
+the experiment name ("fuzzy_ensemble_experiments"). This is additive to the CSV output,
+set `mlflow: false` in a config to skip it for that experiment.
 
 Usage:
-    uv run python experiments/run_synthetic_experiments.py --config tests/binary_moderate.yaml
+    uv run python experiments/run_synthetic_experiments.py --config tests/[test_name].yaml
         # runs just that one experiment file (the default mode)
 
     uv run python experiments/run_synthetic_experiments.py --sweep
@@ -55,23 +30,22 @@ import numpy as np
 import pandas as pd
 import yaml
 from sklearn.datasets import make_classification
-from sklearn.ensemble import BaggingClassifier
-from sklearn.metrics import accuracy_score
+from sklearn.metrics import accuracy_score, roc_auc_score
 from sklearn.model_selection import StratifiedKFold
-from sklearn.tree import DecisionTreeClassifier
 
 from src.Base_Model import FuzzyEspecialistEnsembleClassifier
-from src.model_variants import (
-    FastKSelectionEnsembleClassifier,
+from src.model_variants.Changes_Clustering_Algorithm import (
     FuzzyKMedoidsEspecialistEnsembleClassifier,
     GMMEspecialistEnsembleClassifier,
-    PerceptronEspecialistEnsembleClassifier,
     PossibilisticCMeansEspecialistEnsembleClassifier,
-    SVMEspecialistEnsembleClassifier,
 )
-from src.baselines import (
-    ForestOfLocalTreesBaseline,
-    FuzzyBaggingBaseline,
+from src.model_variants.Changes_Find_K_Method import FastKSelectionEnsembleClassifier
+# Perceptron variant is disabled for now.
+# from src.model_variants.Changes_Base_Classifier import PerceptronEspecialistEnsembleClassifier
+from src.baselines.baselines import (
+    BaggingBaseline,
+    BoostingBaseline,
+    DecisionTreeBaseline,
     RandomForestBaseline,
 )
 
@@ -80,28 +54,43 @@ DEFAULT_TESTS_DIR = PROJECT_ROOT / "tests"
 DEFAULT_OUTPUTS_DIR = PROJECT_ROOT / "outputs"
 
 # Every model available to an experiment config's `models:` list, keyed by the
-# name used in the YAML. Each entry is a zero-arg-besides-random_state factory
-# so every fold gets a FRESH instance (same reasoning as debug_experiment_iris.py:
-# avoids any risk of state leaking between folds).
+# name used in the YAML.
 MODEL_REGISTRY = {
-    # Plain sklearn reference points, kept for continuity with the old
-    # interactive app's fixed comparison set.
-    "DecisionTree": lambda random_state: DecisionTreeClassifier(random_state=random_state),
-    "Bagging": lambda random_state: BaggingClassifier(random_state=random_state),
     # Main model.
     "FuzzyEspecialistEnsembleClassifier": lambda random_state: FuzzyEspecialistEnsembleClassifier(random_state=random_state),
+    "Fuzzy_m1.5": lambda random_state: FuzzyEspecialistEnsembleClassifier(random_state=random_state, fuzzy_m=1.5),
+    "Fuzzy_m1.2": lambda random_state: FuzzyEspecialistEnsembleClassifier(random_state=random_state, fuzzy_m=1.2),
     # Clustering-algorithm / k-selection / base-classifier variants.
     "GMMEspecialistEnsembleClassifier": lambda random_state: GMMEspecialistEnsembleClassifier(random_state=random_state),
     "FuzzyKMedoidsEspecialistEnsembleClassifier": lambda random_state: FuzzyKMedoidsEspecialistEnsembleClassifier(random_state=random_state),
     "PossibilisticCMeansEspecialistEnsembleClassifier": lambda random_state: PossibilisticCMeansEspecialistEnsembleClassifier(random_state=random_state),
     "FastKSelectionEnsembleClassifier": lambda random_state: FastKSelectionEnsembleClassifier(random_state=random_state),
-    "SVMEspecialistEnsembleClassifier": lambda random_state: SVMEspecialistEnsembleClassifier(random_state=random_state),
-    "PerceptronEspecialistEnsembleClassifier": lambda random_state: PerceptronEspecialistEnsembleClassifier(random_state=random_state),
+    #"PerceptronEspecialistEnsembleClassifier": lambda random_state: PerceptronEspecialistEnsembleClassifier(random_state=random_state),
     # Baselines.
+    "DecisionTree": lambda random_state: DecisionTreeBaseline(random_state=random_state),
+    "Bagging": lambda random_state: BaggingBaseline(random_state=random_state),
+    "Boosting": lambda random_state: BoostingBaseline(random_state=random_state),
     "RandomForestBaseline": lambda random_state: RandomForestBaseline(random_state=random_state),
-    "ForestOfLocalTreesBaseline": lambda random_state: ForestOfLocalTreesBaseline(random_state=random_state),
-    "FuzzyBaggingBaseline": lambda random_state: FuzzyBaggingBaseline(random_state=random_state),
 }
+
+
+def compute_auc(model, X_test, y_test):
+    """ROC AUC from `predict_proba` (binary, or multiclass one-vs-rest).
+    Returns NaN if it can't be computed (e.g. a model without predict_proba,
+    or a single-class test fold)."""
+    try:
+        probs = model.predict_proba(X_test)
+    except Exception as e:
+        print(f"    AUC unavailable: {e}")
+        return np.nan
+    try:
+        if probs.shape[1] == 2:
+            return float(roc_auc_score(y_test, probs[:, 1]))
+        labels = getattr(model, "classes_", np.unique(y_test))
+        return float(roc_auc_score(y_test, probs, multi_class="ovr", labels=labels))
+    except ValueError as e:
+        print(f"    AUC Warning in this fold: {e}")
+        return np.nan
 
 
 def load_experiment_config(config_path: Path) -> dict:
@@ -125,11 +114,7 @@ def resolve_model_names(config: dict) -> list:
 
 def apply_augmentation(X: np.ndarray, augmentation: dict, random_state: int) -> np.ndarray:
     """
-    Ports the skew/outlier/scale transforms from
-    interactive_make_classification_full.py (its `apply_skew_and_outliers`
-    plus the scale-factor block), applied identically -- same formulas, same
-    order (skew+outliers, then scale). The "spatial rule change" control from
-    that app is intentionally NOT ported here.
+    Applies the skew/outlier/scale transforms.
     """
     X = X.copy()
     rng = np.random.RandomState(random_state)
@@ -174,9 +159,8 @@ def build_dataset(config: dict):
 
 def run_one_model(model_name: str, X, y, skf: StratifiedKFold, random_state: int) -> dict:
     """Runs k-fold CV for a single model, returning summary stats. Any
-    exception during a fold is caught and recorded rather than aborting the
-    whole sweep (mirrors debug_experiment_iris.py's per-fold error handling)."""
-    fold_acc, fold_train_time, fold_infer_time = [], [], []
+    exception during a fold is caught and recorded."""
+    fold_acc, fold_auc, fold_train_time, fold_infer_time = [], [], [], []
 
     for fold_idx, (train_idx, test_idx) in enumerate(skf.split(X, y), 1):
         X_train, X_test = X[train_idx], X[test_idx]
@@ -194,11 +178,13 @@ def run_one_model(model_name: str, X, y, skf: StratifiedKFold, random_state: int
             infer_time = time.perf_counter() - t0
 
             acc = accuracy_score(y_test, y_pred)
+            auc = compute_auc(model, X_test, y_test)
 
-            print(f"  [{model_name}] fold {fold_idx}: acc={acc:.4f} "
+            print(f"  [{model_name}] fold {fold_idx}: acc={acc:.4f} auc={auc:.4f} "
                   f"train={train_time:.3f}s infer={infer_time:.3f}s")
 
             fold_acc.append(acc)
+            fold_auc.append(auc)
             fold_train_time.append(train_time)
             fold_infer_time.append(infer_time)
 
@@ -211,6 +197,8 @@ def run_one_model(model_name: str, X, y, skf: StratifiedKFold, random_state: int
             "n_folds_ok": 0,
             "accuracy_mean": np.nan,
             "accuracy_std": np.nan,
+            "auc_mean": np.nan,
+            "auc_std": np.nan,
             "train_time_mean_s": np.nan,
             "train_time_std_s": np.nan,
             "inference_time_mean_s": np.nan,
@@ -222,6 +210,8 @@ def run_one_model(model_name: str, X, y, skf: StratifiedKFold, random_state: int
         "n_folds_ok": len(fold_acc),
         "accuracy_mean": float(np.mean(fold_acc)),
         "accuracy_std": float(np.std(fold_acc)),
+        "auc_mean": float(np.nanmean(fold_auc)) if not np.all(np.isnan(fold_auc)) else np.nan,
+        "auc_std": float(np.nanstd(fold_auc)) if not np.all(np.isnan(fold_auc)) else np.nan,
         "train_time_mean_s": float(np.mean(fold_train_time)),
         "train_time_std_s": float(np.std(fold_train_time)),
         "inference_time_mean_s": float(np.mean(fold_infer_time)),
@@ -233,7 +223,7 @@ def run_experiment(config_path: Path, outputs_dir: Path) -> pd.DataFrame:
     config = load_experiment_config(config_path)
     experiment_name = config["name"]
 
-    print(f"\n=== Experiment: {experiment_name} ({config_path.name}) ===")
+    print(f"\nExperiment: {experiment_name} ({config_path.name}) ===")
 
     X, y = build_dataset(config)
 

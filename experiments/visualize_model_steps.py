@@ -1,11 +1,6 @@
 """
 Step-by-step visualization of the fuzzy specialist ensemble.
 
-Fits one of the fuzzy-based models in `MODEL_REGISTRY` (the main model or any
-clustering / k-selection variant) once on a train/test split of a synthetic
-experiment (any YAML under `tests/`), then reads the state the model keeps after
-`fit` and draws every stage of the pipeline, plus how the pieces perform.
-
 Figures go to `outputs/<experiment name>/viz/<model name>/`:
 
   Part A - the pipeline
@@ -32,8 +27,7 @@ N00 = both wrong, N10/N01 = only one right. +1 = they err on the same points,
 an ensemble wants. Undefined (blank) if either classifier is always right/wrong.
 
 All 2D plots use one PCA fitted on the training data, applied to points and
-centroids alike. The model does not scale features, so the PCA is fitted on the
-raw features too: the plot shows the space the model actually clusters in.
+centroids alike.
 
 Per-variant wording: the score a point gets per cluster is called "membership"
 (fuzzy c-means, fuzzy c-medoids), "responsibility" (GMM) or "typicality" (PCM).
