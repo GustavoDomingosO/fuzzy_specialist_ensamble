@@ -9,6 +9,10 @@ import skfuzzy as fuzz
 import pandas as pd
 import numpy as np
 
+# For time tracking
+import time
+from contextlib import contextmanager
+
 # ==========================================
 # Default hyperparameters
 # ==========================================
@@ -104,6 +108,18 @@ class FuzzyEspecialistEnsembleClassifier(BaseEstimator, ClassifierMixin):
         self.k_optimization_results = None
         self.last_training_membership = None
         self.last_training_data_proc = None
+
+        self.timings_ = {}            # fit-time stage timings (seconds)
+        self.predict_timings_ = {}    # last predict_proba call timings (seconds)
+
+    @contextmanager
+    def _timer(self, store, name):
+        """Records elapsed wall-clock seconds for a block into store[name]."""
+        start = time.perf_counter()
+        try:
+            yield
+        finally:
+            store[name] = store.get(name, 0.0) + (time.perf_counter() - start)
 
     # -------------------------------------------------------------------------
     # Optimization Logic (Finding K)
@@ -351,39 +367,45 @@ class FuzzyEspecialistEnsembleClassifier(BaseEstimator, ClassifierMixin):
         4. Train Ensemble
         """
         self._reset_state()
+        t = self.timings_
 
-        if hasattr(X_train, 'columns'):
-            self.trained_features = list(X_train.columns)
-        else:
-            self.trained_features = [f"f_{i}" for i in range(X_train.shape[1])]
+        with self._timer(t, 'total_fit'):
+            if hasattr(X_train, 'columns'):
+                self.trained_features = list(X_train.columns)
+            else:
+                self.trained_features = [f"f_{i}" for i in range(X_train.shape[1])]
 
-        self.classes_ = np.sort(pd.Series(y_train).unique())
-        self.last_y_train = np.asarray(y_train)
-        self.last_training_data_proc = X_train
+            self.classes_ = np.sort(pd.Series(y_train).unique())
+            self.last_y_train = np.asarray(y_train)
+            self.last_training_data_proc = X_train
 
-        # Find Best K (if not set manually, currently calculated dynamically)
-        suggested_k = self.get_best_k(X_train)
-        if suggested_k is None:
-            suggested_k = self.fallback_k
+            # Find Best K (if not set manually, currently calculated dynamically)
+            with self._timer(t, 'find_best_k'):
+                suggested_k = self.get_best_k(X_train)
+            if suggested_k is None:
+                suggested_k = self.fallback_k
 
-        # Fuzzy Clustering
-        X_clustering, membership_cols = self.run_fuzzy_clustering(
-            X_train, y_train, k=suggested_k
-        )
+            # Fuzzy Clustering
+            with self._timer(t, 'fuzzy_clustering'):
+                X_clustering, membership_cols = self.run_fuzzy_clustering(
+                    X_train, y_train, k=suggested_k
+                )
 
-        if X_clustering is None:
-            raise RuntimeError("Clustering failed.")
+            if X_clustering is None:
+                raise RuntimeError("Clustering failed.")
 
-        # Dataset Creation (Weighted Bootstrapping)
-        cluster_datasets = self._create_cluster_datasets(
-            X_clustering, membership_cols, suggested_k
-        )
+            # Dataset Creation (Weighted Bootstrapping)
+            with self._timer(t, 'create_cluster_datasets'):
+                cluster_datasets = self._create_cluster_datasets(
+                    X_clustering, membership_cols, suggested_k
+                )
 
-        self.raw_cluster_datasets = cluster_datasets
-        self.balanced_datasets = cluster_datasets  # Store for external access if needed
+            self.raw_cluster_datasets = cluster_datasets
+            self.balanced_datasets = cluster_datasets  # Store for external access if needed
 
-        # Train
-        self._train_classifiers(cluster_datasets)
+            # Train
+            with self._timer(t, 'train_classifiers'):
+                self._train_classifiers(cluster_datasets)
 
         return self
 
@@ -394,63 +416,70 @@ class FuzzyEspecialistEnsembleClassifier(BaseEstimator, ClassifierMixin):
         if not self.models:
             raise RuntimeError("Models not trained.")
 
-        n_samples = X_test.shape[0]
-        n_classes = len(self.classes_)
+        self.predict_timings_ = {}
+        t = self.predict_timings_
 
-        # Calculate distances from each sample to each cluster center
-        # Shape: (n_samples, n_clusters)
+        with self._timer(t, 'total_predict_proba'):
+            n_samples = X_test.shape[0]
+            n_classes = len(self.classes_)
 
-        if hasattr(X_test, 'columns'):
-            X_test_proc = X_test[self.trained_features].values
-        else:
-            X_test_proc = np.asarray(X_test)
+            # Calculate distances from each sample to each cluster center
+            # Shape: (n_samples, n_clusters)
 
-        distances = cdist(X_test_proc, self.cluster_centers, metric='euclidean')
+            with self._timer(t, 'cluster_weights'):
+                if hasattr(X_test, 'columns'):
+                    X_test_proc = X_test[self.trained_features].values
+                else:
+                    X_test_proc = np.asarray(X_test)
 
-        # Convert distances to weights (Squared Inverse Distance Weighting)
-        # Adding a tiny epsilon to avoid division by zero if a point sits on a center
-        weights = 1.0 / (distances + 1e-9) ** 2
+                distances = cdist(X_test_proc, self.cluster_centers, metric='euclidean')
 
-        # Normalize weights so they sum to 1 for each sample
-        # Shape: (n_samples, n_clusters)
-        weights /= weights.sum(axis=1, keepdims=True)
+                # Convert distances to weights (Squared Inverse Distance Weighting)
+                # Adding a tiny epsilon to avoid division by zero if a point sits on a center
+                weights = 1.0 / (distances + 1e-9) ** 2
 
-        # This will hold our final weighted probabilities
-        final_probs = np.zeros((n_samples, n_classes))
+                # Normalize weights so they sum to 1 for each sample
+                # Shape: (n_samples, n_clusters)
+                weights /= weights.sum(axis=1, keepdims=True)
 
-        # Iterate through clusters and apply weights
-        # Note: This assumes self.models is a dict where keys match cluster indices
-        for cluster_name, model_list in self.models.items():
+            # This will hold our final weighted probabilities
+            final_probs = np.zeros((n_samples, n_classes))
 
-            if not model_list:
-                continue
-            # Extract the integer from the string 'cluster_0_data'
-            # This splits by underscore and takes the second element: ['cluster', '0', 'data']
-            try:
-                cluster_idx = int(cluster_name.split('_')[1])
-            except (ValueError, IndexError):
-                raise ValueError(f"Could not extract cluster index from key: {cluster_name}")
+            # Iterate through clusters and apply weights
+            # Note: This assumes self.models is a dict where keys match cluster indices
+            for cluster_name, model_list in self.models.items():
 
-            # Get the weights for this specific cluster index
-            cluster_weight = weights[:, cluster_idx].reshape(-1, 1)
+                if not model_list:
+                    continue
+                # Extract the integer from the string 'cluster_0_data'
+                # This splits by underscore and takes the second element: ['cluster', '0', 'data']
+                try:
+                    cluster_idx = int(cluster_name.split('_')[1])
+                except (ValueError, IndexError):
+                    raise ValueError(f"Could not extract cluster index from key: {cluster_name}")
 
-            # Average of models within this specific cluster
-            cluster_model_probs = []
-            for model in model_list:
-                local_p = model.predict_proba(X_test)
-                if local_p.ndim == 1:
-                    local_p = np.expand_dims(local_p, axis=1)
-                local_classes = model.classes_
+                # Get the weights for this specific cluster index
+                cluster_weight = weights[:, cluster_idx].reshape(-1, 1)
 
-                full_p = np.zeros((n_samples, n_classes))
-                for i, cls in enumerate(local_classes):
-                    global_idx = np.where(self.classes_ == cls)[0][0]
-                    full_p[:, global_idx] = local_p[:, i]
+                # Average of models within this specific cluster
+                cluster_model_probs = []
+                for model in model_list:
+                    with self._timer(t, 'tree_predict_proba'):
+                        local_p = model.predict_proba(X_test)
+                        if local_p.ndim == 1:
+                            local_p = np.expand_dims(local_p, axis=1)
+                        local_classes = model.classes_
 
-                cluster_model_probs.append(full_p)
+                    with self._timer(t, 'class_remapping'):
+                        full_p = np.zeros((n_samples, n_classes))
+                        for i, cls in enumerate(local_classes):
+                            global_idx = np.where(self.classes_ == cls)[0][0]
+                            full_p[:, global_idx] = local_p[:, i]
 
-            avg_cluster_p = np.mean(cluster_model_probs, axis=0)
-            final_probs += avg_cluster_p * cluster_weight
+                    cluster_model_probs.append(full_p)
+                with self._timer(t, 'aggregation'):
+                    avg_cluster_p = np.mean(cluster_model_probs, axis=0)
+                    final_probs += avg_cluster_p * cluster_weight
 
         return final_probs
 
