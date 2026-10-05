@@ -156,11 +156,26 @@ def build_dataset(config: dict):
 
     return X, y
 
+def _summarize_timings(prefix: str, fold_timings: list) -> dict:
+    """
+    fold_timings: one dict per successful fold, e.g. [{'find_best_k': 12.4, ...}, ...]
+    Returns {f'{prefix}_{stage}_mean_s': ..., f'{prefix}_{stage}_std_s': ...}.
+    Stages missing in a fold (or models without timings, like the baselines)
+    are ignored / simply produce no columns.
+    """
+    summary = {}
+    stages = sorted({stage for t in fold_timings for stage in t})
+    for stage in stages:
+        values = [t[stage] for t in fold_timings if stage in t]
+        summary[f"{prefix}_{stage}_mean_s"] = float(np.mean(values))
+        summary[f"{prefix}_{stage}_std_s"] = float(np.std(values))
+    return summary
 
 def run_one_model(model_name: str, X, y, skf: StratifiedKFold, random_state: int) -> dict:
     """Runs k-fold CV for a single model, returning summary stats. Any
     exception during a fold is caught and recorded."""
     fold_acc, fold_auc, fold_train_time, fold_infer_time = [], [], [], []
+    fold_fit_stages, fold_predict_stages = [], [] 
 
     for fold_idx, (train_idx, test_idx) in enumerate(skf.split(X, y), 1):
         X_train, X_test = X[train_idx], X[test_idx]
@@ -177,6 +192,9 @@ def run_one_model(model_name: str, X, y, skf: StratifiedKFold, random_state: int
             y_pred = model.predict(X_test)
             infer_time = time.perf_counter() - t0
 
+            fit_stages = dict(getattr(model, "timings_", {}) or {})
+            predict_stages = dict(getattr(model, "predict_timings_", {}) or {})
+
             acc = accuracy_score(y_test, y_pred)
             auc = compute_auc(model, X_test, y_test)
 
@@ -187,6 +205,9 @@ def run_one_model(model_name: str, X, y, skf: StratifiedKFold, random_state: int
             fold_auc.append(auc)
             fold_train_time.append(train_time)
             fold_infer_time.append(infer_time)
+            fold_fit_stages.append(fit_stages)
+            fold_predict_stages.append(predict_stages)
+
 
         except Exception as e:
             print(f"  [{model_name}] fold {fold_idx} FAILED: {e}")
@@ -216,6 +237,8 @@ def run_one_model(model_name: str, X, y, skf: StratifiedKFold, random_state: int
         "train_time_std_s": float(np.std(fold_train_time)),
         "inference_time_mean_s": float(np.mean(fold_infer_time)),
         "inference_time_std_s": float(np.std(fold_infer_time)),
+        **_summarize_timings("fit", fold_fit_stages),
+        **_summarize_timings("predict", fold_predict_stages), 
     }
 
 
