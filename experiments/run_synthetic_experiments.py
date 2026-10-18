@@ -39,10 +39,14 @@ from src.model_variants.Changes_Clustering_Algorithm import (
     GMMEspecialistEnsembleClassifier,
     PossibilisticCMeansEspecialistEnsembleClassifier,
 )
-from src.model_variants.Changes_Find_K_Method import FastKSelectionEnsembleClassifier
+from src.model_variants.Changes_Find_K_Method import (FastKSelectionEnsembleClassifier, 
+                                                      CVKSelectionEnsembleClassifier, 
+                                                      SupervisedEntropyKSelectionEnsembleClassifier,
+                                                      StabilityKSelectionEnsembleClassifier,
+                                                      GapStatisticKSelectionEnsembleClassifier)
 # Perceptron variant is disabled for now.
 # from src.model_variants.Changes_Base_Classifier import PerceptronEspecialistEnsembleClassifier
-from src.baselines.baselines import (
+from src.baselines.baselines_decision_tree import (
     BaggingBaseline,
     BoostingBaseline,
     DecisionTreeBaseline,
@@ -58,13 +62,19 @@ DEFAULT_OUTPUTS_DIR = PROJECT_ROOT / "outputs"
 MODEL_REGISTRY = {
     # Main model.
     "FuzzyEspecialistEnsembleClassifier": lambda random_state: FuzzyEspecialistEnsembleClassifier(random_state=random_state),
-    "Fuzzy_m1.5": lambda random_state: FuzzyEspecialistEnsembleClassifier(random_state=random_state, fuzzy_m=1.5),
     "Fuzzy_m1.2": lambda random_state: FuzzyEspecialistEnsembleClassifier(random_state=random_state, fuzzy_m=1.2),
-    # Clustering-algorithm / k-selection / base-classifier variants.
+    "Fuzzy_m1.5": lambda random_state: FuzzyEspecialistEnsembleClassifier(random_state=random_state, fuzzy_m=1.5),
+    "Fuzzy_m2.5": lambda random_state: FuzzyEspecialistEnsembleClassifier(random_state=random_state, fuzzy_m=2.5),
+    "Fuzzy_m3": lambda random_state: FuzzyEspecialistEnsembleClassifier(random_state=random_state, fuzzy_m=3),
+    # # Clustering-algorithm / k-selection / base-classifier variants.
     "GMMEspecialistEnsembleClassifier": lambda random_state: GMMEspecialistEnsembleClassifier(random_state=random_state),
     "FuzzyKMedoidsEspecialistEnsembleClassifier": lambda random_state: FuzzyKMedoidsEspecialistEnsembleClassifier(random_state=random_state),
     "PossibilisticCMeansEspecialistEnsembleClassifier": lambda random_state: PossibilisticCMeansEspecialistEnsembleClassifier(random_state=random_state),
     "FastKSelectionEnsembleClassifier": lambda random_state: FastKSelectionEnsembleClassifier(random_state=random_state),
+    # "CVKSelectionEnsembleClassifier": lambda random_state: CVKSelectionEnsembleClassifier(random_state=random_state),
+    # "SupervisedEntropyKSelectionEnsembleClassifier": lambda random_state: SupervisedEntropyKSelectionEnsembleClassifier(random_state=random_state),
+    # "StabilityKSelectionEnsembleClassifier": lambda random_state: StabilityKSelectionEnsembleClassifier(random_state=random_state),
+    # "GapStatisticKSelectionEnsembleClassifier": lambda random_state: GapStatisticKSelectionEnsembleClassifier(random_state=random_state),
     #"PerceptronEspecialistEnsembleClassifier": lambda random_state: PerceptronEspecialistEnsembleClassifier(random_state=random_state),
     # Baselines.
     "DecisionTree": lambda random_state: DecisionTreeBaseline(random_state=random_state),

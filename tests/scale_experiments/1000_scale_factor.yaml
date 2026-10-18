@@ -1,0 +1,31 @@
+# Same base dataset as binary_moderate.yaml, but demonstrates the
+# augmentation section (skew, outliers, scale) ported from
+# interactive_make_classification_full.py.
+
+name: scale_experiment/1000
+description: "Extreme scale: all features multiplied by 10000. Everything else identical to control.yaml."
+
+dataset:
+  n_samples: 1500
+  n_features: 15
+  n_informative: 5
+  n_redundant: 0
+  n_clusters_per_class: 2
+  class_sep: 0.75
+  flip_y: 0.01
+  n_classes: 2
+  weights: null
+  random_state: 100
+
+augmentation:
+  skew_factor: 0         # mild exponential skew
+  outlier_ratio: 0.00    # 0% of rows get a random 5x-10x spike
+  scale_factor: 10000    # uniform magnitude multiplier
+  partial_scale: false   # applied to all features, not just the first 2
+
+cv:
+  n_splits: 5
+  random_state: 100
+
+models: all
+mlflow: true

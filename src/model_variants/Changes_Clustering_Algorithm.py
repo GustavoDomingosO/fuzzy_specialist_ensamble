@@ -192,3 +192,57 @@ class PossibilisticCMeansEspecialistEnsembleClassifier(FuzzyEspecialistEnsembleC
             X_T, c=k, m=m, error=error, max_iter=max_iter, random_state=self.random_state
         )
         return centers, typicality
+
+
+
+# 2. Fuzzy c-medoids (cluster prototypes are real data points, not means)
+    def _fcm_pfcv(X, c, m=2, error=0.005, max_iter=1000, random_state=None):
+        """
+        TODO
+        """
+        n_samples = X.shape[0]
+        rng = np.random.default_rng(random_state)
+
+        dist_matrix = cdist(X, X, metric='euclidean')
+        medoid_idx = rng.choice(n_samples, size=c, replace=False)
+
+        u = np.full((c, n_samples), 1.0 / c)
+        power = 2.0 / (m - 1)
+
+        for _ in range(max_iter):
+            d = np.fmax(dist_matrix[medoid_idx], 1e-10)  # (c, n_samples)
+            inv_d = d ** (-power)
+            u_new = inv_d / inv_d.sum(axis=0, keepdims=True)
+
+            # Pick, for each cluster, the candidate point minimizing the
+            # membership-weighted sum of distances to every other point.
+            weights = u_new ** m
+            costs = weights @ dist_matrix  # (c, n_samples); dist_matrix is symmetric
+            new_medoid_idx = np.argmin(costs, axis=1)
+
+            shift = np.max(np.abs(u_new - u))
+            u = u_new
+            medoids_changed = not np.array_equal(new_medoid_idx, medoid_idx)
+            medoid_idx = new_medoid_idx
+
+            if shift < error and not medoids_changed:
+                break
+
+        centers = X[medoid_idx]
+        return centers, u, medoid_idx
+
+
+class FCM_PFCVEspecialistEnsembleClassifier(FuzzyEspecialistEnsembleClassifier):
+    """
+    TODO
+    """
+
+    def _fit_fuzzy_clustering(self, X_T, k, m=None, error=None, max_iter=None):
+        m = self.fuzzy_m if m is None else m
+        error = self.fuzzy_error if error is None else error
+        max_iter = self.fuzzy_max_iter if max_iter is None else max_iter
+
+        centers, typicality = _possibilistic_cmeans(
+            X_T, c=k, m=m, error=error, max_iter=max_iter, random_state=self.random_state
+        )
+        return centers, typicality

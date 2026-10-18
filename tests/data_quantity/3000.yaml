@@ -2,11 +2,11 @@
 # augmentation section (skew, outliers, scale) ported from
 # interactive_make_classification_full.py.
 
-name: 1_2_feature_imbalance
-description: "Feature scale imbalance: only two features multiplied by 1e4. Everything else identical to control.yaml."
+name: data_quantity/3000
+description: "Data abundance: n_samples = 3000. Everything else identical to control.yaml."
 
 dataset:
-  n_samples: 1500
+  n_samples: 3000
   n_features: 15
   n_informative: 5
   n_redundant: 0
@@ -20,8 +20,8 @@ dataset:
 augmentation:
   skew_factor: 0         # mild exponential skew
   outlier_ratio: 0.00    # 0% of rows get a random 5x-10x spike
-  scale_factor: 10000    # uniform magnitude multiplier
-  partial_scale: true    # applied to the first 2 features only
+  scale_factor: 1        # uniform magnitude multiplier
+  partial_scale: false   # applied to all features, not just the first 2
 
 cv:
   n_splits: 5
