@@ -274,3 +274,89 @@ class FCM_PFCVEspecialistEnsembleClassifier(FuzzyEspecialistEnsembleClassifier):
             X_T, c=c, m=m, error=error, max_iter=max_iter, random_state=self.random_state
         )
         return centers, membership
+
+
+# 5. Gustafson-Kessel (fuzzy c-means with one adaptive quadratic distance per
+#    cluster, defined by that cluster's fuzzy covariance matrix)
+def _gustafson_kessel(X_T, c, m=2, error=0.005, max_iter=1000, random_state=None):
+    """
+    Gustafson-Kessel as written in de Carvalho et al. (2006, Fuzzy Sets and
+    Systems 157, sec. 3.2.1).
+
+    Like `_fcm_pfcv`, but every cluster has its own matrix M_i, so clusters can
+    take different shapes and orientations: d_Mi^2(x, g_i) = (x - g_i)^T M_i (x - g_i).
+    Each iteration:
+        1. prototypes (Eq. 3):  g_i = sum_k u_ik^m x_k / sum_k u_ik^m
+        2. matrices   (Eq. 15): C_i = sum_k u_ik^m (x_k - g_i)(x_k - g_i)^T
+                                M_i = det(C_i)^(1/p) C_i^-1        (so det(M_i) = 1)
+        3. membership (Eq. 16): u_ik = [sum_h (d_Mi^2(x_k, g_i) / d_Mh^2(x_k, g_h))^(1/(m-1))]^-1
+    The stopping rule is the one the paper gives for FCM-PFCV: |J(t) - J(t-1)| <= error,
+    with J = sum u_ik^m d_Mi^2(x_k, g_i), or `max_iter` iterations. `error` is a
+    tolerance on J, not on the membership shift like the other variants.
+
+    The initial membership is random (seeded by `random_state`). det(C_i) goes
+    through `slogdet`, and each C_i gets a tiny ridge so a singular C_i can
+    still be inverted. The paper adds no other regularization: a cluster with
+    fewer effective points than features gives a degenerate C_i.
+
+    Returns (centers, membership):
+        centers:    ndarray, shape (c, n_features)
+        membership: ndarray, shape (c, n_samples), columns sum to 1
+    """
+    X = X_T.T  # (n_samples, n_features)
+    n_samples, p = X.shape
+    rng = np.random.default_rng(random_state)
+
+    u = rng.random((c, n_samples)) + 1e-3
+    u /= u.sum(axis=0, keepdims=True)
+
+    exponent = 1.0 / (m - 1)
+    identity = np.eye(p)
+    j_prev = np.inf
+
+    for _ in range(max_iter):
+        w = u ** m
+        centers = (w @ X) / w.sum(axis=1, keepdims=True)  # (c, p)
+
+        diff = X[None, :, :] - centers[:, None, :]  # (c, n_samples, p)
+        C = np.einsum('ik,ikp,ikq->ipq', w, diff, diff)  # (c, p, p)
+        C += (1e-10 * np.trace(C, axis1=1, axis2=2) / p)[:, None, None] * identity
+        _, logdet = np.linalg.slogdet(C)  # (c,)
+        M = np.exp(logdet / p)[:, None, None] * np.linalg.inv(C)  # (c, p, p)
+
+        d_sq = np.fmax(np.einsum('ikp,ipq,ikq->ik', diff, M, diff), 1e-10)  # (c, n_samples)
+        inv_d = d_sq ** (-exponent)
+        u = inv_d / inv_d.sum(axis=0, keepdims=True)
+
+        j = float(((u ** m) * d_sq).sum())
+        if abs(j_prev - j) <= error:
+            break
+        j_prev = j
+
+    # Prototypes consistent with the final membership.
+    w = u ** m
+    centers = (w @ X) / w.sum(axis=1, keepdims=True)
+    return centers, u
+
+
+class GKEspecialistEnsembleClassifier(FuzzyEspecialistEnsembleClassifier):
+    """
+    Replaces fuzzy c-means with Gustafson-Kessel (see `_gustafson_kessel`): each
+    cluster has its own adaptive quadratic distance, learned from the cluster's
+    fuzzy covariance. `fuzzy_m` is the fuzziness exponent and `fuzzy_error` the
+    tolerance on the change of the criterion J.
+
+    Only the clustering step uses the matrices M_i. The c-selection metrics and
+    the cluster weights at inference time keep using the Euclidean distance
+    to the prototypes, as in the base model.
+    """
+
+    def _fit_fuzzy_clustering(self, X_T, c, m=None, error=None, max_iter=None):
+        m = self.fuzzy_m if m is None else m
+        error = self.fuzzy_error if error is None else error
+        max_iter = self.fuzzy_max_iter if max_iter is None else max_iter
+
+        centers, membership = _gustafson_kessel(
+            X_T, c=c, m=m, error=error, max_iter=max_iter, random_state=self.random_state
+        )
+        return centers, membership
