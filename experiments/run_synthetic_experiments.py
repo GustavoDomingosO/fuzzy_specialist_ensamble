@@ -31,7 +31,7 @@ import numpy as np
 import pandas as pd
 import yaml
 from sklearn.datasets import make_classification
-from sklearn.metrics import accuracy_score, roc_auc_score
+from sklearn.metrics import accuracy_score, adjusted_rand_score, roc_auc_score
 from sklearn.model_selection import StratifiedKFold
 
 from src.Base_Model import FuzzyEspecialistEnsembleClassifier
@@ -171,10 +171,64 @@ def apply_augmentation(X: np.ndarray, augmentation: dict, random_state: int) -> 
     return X
 
 
-def build_dataset(config: dict, random_state: int = None):
-    """`random_state` overrides the YAML's dataset seed (used to draw the
-    Monte Carlo repetitions)."""
+def recover_cluster_labels(dataset_params: dict, X_shuffled: np.ndarray) -> np.ndarray:
+    """
+    Ground-truth cluster id of every row of a `make_classification` dataset.
+
+    make_classification builds `n_classes * n_clusters_per_class` clusters but
+    only returns the class label. Before shuffling, the rows are laid out
+    cluster by cluster, so the same call with `shuffle=False` (same seed)
+    yields the same rows in cluster order. Rows are matched to the shuffled
+    ones by their sorted values, which ignores the feature permutation.
+    """
+    n_samples = dataset_params["n_samples"]
+    n_classes = dataset_params.get("n_classes", 2)
+    n_clusters_per_class = dataset_params.get("n_clusters_per_class", 2)
+    n_clusters = n_classes * n_clusters_per_class
+
+    # Same per-cluster sample counts as make_classification.
+    weights = dataset_params.get("weights")
+    if weights is None:
+        weights = [1.0 / n_classes] * n_classes
+    elif len(weights) == n_classes - 1:
+        weights = list(weights) + [1.0 - sum(weights)]
+    counts = [int(n_samples * weights[k % n_classes] / n_clusters_per_class)
+              for k in range(n_clusters)]
+    for i in range(n_samples - sum(counts)):
+        counts[i % n_clusters] += 1
+    ordered_clusters = np.repeat(np.arange(n_clusters), counts)
+
+    X_ordered, _ = make_classification(**{**dataset_params, "shuffle": False})
+    row_of = {row.tobytes(): i for i, row in enumerate(np.sort(X_ordered, axis=1))}
+    if len(row_of) != n_samples:
+        raise RuntimeError("Duplicate rows: cannot recover cluster labels.")
+    try:
+        order = [row_of[row.tobytes()] for row in np.sort(X_shuffled, axis=1)]
+    except KeyError:
+        raise RuntimeError("Could not match shuffled rows to the unshuffled dataset.")
+    return ordered_clusters[order]
+
+
+def build_dataset_with_clusters(config: dict, random_state: int = None):
+    """Like `build_dataset`, also returning the ground-truth cluster id of each
+    row (the reference for the ARI of the clustering). `random_state` overrides
+    the YAML's dataset seed (used to draw the Monte Carlo repetitions)."""
     dataset_params = dict(config["dataset"])  # copy -- make_classification mutates nothing, but be safe
+    if random_state is not None:
+        dataset_params["random_state"] = random_state
+    random_state = dataset_params.get("random_state", 42)
+    X, y = make_classification(**dataset_params)
+    clusters = recover_cluster_labels(dataset_params, X)
+
+    augmentation = config.get("augmentation")
+    if augmentation:
+        X = apply_augmentation(X, augmentation, random_state)
+
+    return X, y, clusters
+
+
+def build_dataset(config: dict, random_state: int = None):
+    dataset_params = dict(config["dataset"])
     if random_state is not None:
         dataset_params["random_state"] = random_state
     random_state = dataset_params.get("random_state", 42)
@@ -185,6 +239,16 @@ def build_dataset(config: dict, random_state: int = None):
         X = apply_augmentation(X, augmentation, random_state)
 
     return X, y
+
+def compute_ari(model, clusters_train):
+    """ARI between the true clusters and the hard partition (argmax of the
+    membership) the model found on its training rows. NaN for models without
+    a clustering step (the baselines)."""
+    membership = getattr(model, "last_training_membership", None)
+    if membership is None:
+        return np.nan
+    return float(adjusted_rand_score(clusters_train, np.argmax(membership, axis=0)))
+
 
 def _summarize_timings(prefix: str, fold_timings: list) -> dict:
     """
@@ -201,10 +265,11 @@ def _summarize_timings(prefix: str, fold_timings: list) -> dict:
         summary[f"{prefix}_{stage}_std_s"] = float(np.std(values))
     return summary
 
-def run_one_model(model_name: str, X, y, skf: StratifiedKFold, random_state: int) -> dict:
+def run_one_model(model_name: str, X, y, skf: StratifiedKFold, random_state: int, clusters=None) -> dict:
     """Runs k-fold CV for a single model, returning summary stats. Any
     exception during a fold is caught and recorded."""
     fold_acc, fold_auc, fold_train_time, fold_infer_time = [], [], [], []
+    fold_ari, fold_k = [], []
     fold_fit_stages, fold_predict_stages = [], [] 
 
     for fold_idx, (train_idx, test_idx) in enumerate(skf.split(X, y), 1):
@@ -227,12 +292,15 @@ def run_one_model(model_name: str, X, y, skf: StratifiedKFold, random_state: int
 
             acc = accuracy_score(y_test, y_pred)
             auc = compute_auc(model, X_test, y_test)
+            ari = compute_ari(model, clusters[train_idx]) if clusters is not None else np.nan
 
             print(f"  [{model_name}] fold {fold_idx}: acc={acc:.4f} auc={auc:.4f} "
                   f"train={train_time:.3f}s infer={infer_time:.3f}s")
 
             fold_acc.append(acc)
             fold_auc.append(auc)
+            fold_ari.append(ari)
+            fold_k.append(getattr(model, "k", None) or np.nan)
             fold_train_time.append(train_time)
             fold_infer_time.append(infer_time)
             fold_fit_stages.append(fit_stages)
@@ -250,6 +318,9 @@ def run_one_model(model_name: str, X, y, skf: StratifiedKFold, random_state: int
             "accuracy_std": np.nan,
             "auc_mean": np.nan,
             "auc_std": np.nan,
+            "ari_mean": np.nan,
+            "ari_std": np.nan,
+            "k_mean": np.nan,
             "train_time_mean_s": np.nan,
             "train_time_std_s": np.nan,
             "inference_time_mean_s": np.nan,
@@ -263,6 +334,9 @@ def run_one_model(model_name: str, X, y, skf: StratifiedKFold, random_state: int
         "accuracy_std": float(np.std(fold_acc)),
         "auc_mean": float(np.nanmean(fold_auc)) if not np.all(np.isnan(fold_auc)) else np.nan,
         "auc_std": float(np.nanstd(fold_auc)) if not np.all(np.isnan(fold_auc)) else np.nan,
+        "ari_mean": float(np.nanmean(fold_ari)) if not np.all(np.isnan(fold_ari)) else np.nan,
+        "ari_std": float(np.nanstd(fold_ari)) if not np.all(np.isnan(fold_ari)) else np.nan,
+        "k_mean": float(np.nanmean(fold_k)) if not np.all(np.isnan(fold_k)) else np.nan,
         "train_time_mean_s": float(np.mean(fold_train_time)),
         "train_time_std_s": float(np.std(fold_train_time)),
         "inference_time_mean_s": float(np.mean(fold_infer_time)),
@@ -324,7 +398,7 @@ def run_experiment(config_path: Path, outputs_dir: Path, n_datasets: int = None)
             cv_seed = base_cv_seed + dataset_idx
             print(f"\n Dataset {dataset_idx + 1}/{n_datasets} (seed={dataset_seed})")
 
-            X, y = build_dataset(config, random_state=dataset_seed)
+            X, y, clusters = build_dataset_with_clusters(config, random_state=dataset_seed)
             skf = StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=cv_seed)
 
             dataset_cm = (
@@ -343,10 +417,10 @@ def run_experiment(config_path: Path, outputs_dir: Path, n_datasets: int = None)
                             param_probe = MODEL_REGISTRY[model_name](cv_seed)
                             if hasattr(param_probe, "get_params"):
                                 mlflow.log_params(param_probe.get_params())
-                            summary = run_one_model(model_name, X, y, skf, cv_seed)
+                            summary = run_one_model(model_name, X, y, skf, cv_seed, clusters)
                             mlflow.log_metrics({k: v for k, v in summary.items() if isinstance(v, (int, float))})
                     else:
-                        summary = run_one_model(model_name, X, y, skf, cv_seed)
+                        summary = run_one_model(model_name, X, y, skf, cv_seed, clusters)
 
                     results.append({"dataset_idx": dataset_idx, "dataset_seed": dataset_seed, **summary})
 
