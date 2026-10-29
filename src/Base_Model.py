@@ -68,6 +68,7 @@ class FuzzyEspecialistEnsembleClassifier(BaseEstimator, ClassifierMixin):
         membership_threshold: float = DEFAULT_MEMBERSHIP_THRESHOLD,
         num_subsamples: int = DEFAULT_NUM_SUBSAMPLES,
         min_samples: int = DEFAULT_MIN_SAMPLES,
+        c_override: int = None,
     ):
         # NOTE: per sklearn's BaseEstimator convention, __init__ does nothing
         # but store constructor arguments verbatim (no derived state, no
@@ -86,6 +87,7 @@ class FuzzyEspecialistEnsembleClassifier(BaseEstimator, ClassifierMixin):
         self.membership_threshold = membership_threshold
         self.num_subsamples = num_subsamples
         self.min_samples = min_samples
+        self.c_override = c_override
 
     def _reset_state(self):
         """
@@ -384,6 +386,9 @@ class FuzzyEspecialistEnsembleClassifier(BaseEstimator, ClassifierMixin):
                 suggested_k = self.get_best_k(X_train)
             if suggested_k is None:
                 suggested_k = self.fallback_k
+
+            if self.c_override is not None:
+                suggested_k = self.c_override
 
             # Fuzzy Clustering
             with self._timer(t, 'fuzzy_clustering'):
