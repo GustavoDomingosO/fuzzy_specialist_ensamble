@@ -381,14 +381,14 @@ class FuzzyEspecialistEnsembleClassifier(BaseEstimator, ClassifierMixin):
             self.last_y_train = np.asarray(y_train)
             self.last_training_data_proc = X_train
 
-            # Find Best C (if not set manually, currently calculated dynamically)
-            with self._timer(t, 'find_best_c'):
-                suggested_c = self.get_best_c(X_train)
-            if suggested_c is None:
-                suggested_c = self.fallback_c
-
+            # Find Best C (skipped when c_override fixes it manually)
             if self.c_override is not None:
                 suggested_c = self.c_override
+            else:
+                with self._timer(t, 'find_best_c'):
+                    suggested_c = self.get_best_c(X_train)
+                if suggested_c is None:
+                    suggested_c = self.fallback_c
 
             # Fuzzy Clustering
             with self._timer(t, 'fuzzy_clustering'):
