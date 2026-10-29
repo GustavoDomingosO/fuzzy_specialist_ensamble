@@ -20,8 +20,8 @@ from contextlib import contextmanager
 DEFAULT_FUZZY_M = 2                    # Fuzzy clustering fuzziness exponent
 DEFAULT_FUZZY_ERROR = 0.005            # Fuzzy clustering convergence threshold
 DEFAULT_FUZZY_MAX_ITER = 1000          # Fuzzy clustering max iterations
-DEFAULT_K_RANGE = range(2, 11)         # Candidate k values tried when choosing k
-DEFAULT_FALLBACK_K = 3                 # k used if no heuristic reaches a consensus
+DEFAULT_C_RANGE = range(2, 11)         # Candidate c values tried when choosing c
+DEFAULT_FALLBACK_C = 3                 # c used if no heuristic reaches a consensus
 DEFAULT_MEMBERSHIP_THRESHOLD = 0.3     # Min membership degree to count a point "in" a cluster
 DEFAULT_NUM_SUBSAMPLES = 100           # Total bootstrap subsamples (~= trees) across all clusters
 DEFAULT_MIN_SAMPLES = 10               # Minimum samples per bootstrap subsample
@@ -36,15 +36,15 @@ class FuzzyEspecialistEnsembleClassifier(BaseEstimator, ClassifierMixin):
 
     1. Tomamos os dados.
     2. Nós usamos 10 métricas de clusterização por *voto da maioria* para
-       definir o k ideal.
-    3. Usamos o K para realizar a clusterização fuzzy usando *fuzzy c means*.
+       definir o c ideal.
+    3. Usamos o C para realizar a clusterização fuzzy usando *fuzzy c means*.
     4. Usamos a quantidade de pontos com grau de pertinência maior que um
        threshold (default = 0.3) como tamanho dos samples, em seguida
        calculamos a média dos graus de pertinência por classe para encontrar
        a proporção ideal por cluster então puxamos aleatoriamente usando os
        graus de pertinências como pesos, mas respeitando a proporção
-       calculada. Fazemos isso 100/k.
-    5. Treinamos *100/k* modelos para cada subsample resultando em 100
+       calculada. Fazemos isso 100/c.
+    5. Treinamos *100/c* modelos para cada subsample resultando em 100
        modelos.
     6. Para a fusão de modelos, fazemos um *soft voting com pesos, em que o
        peso é equivalente ao inverso do quadrado da distância do novo ponto
@@ -63,8 +63,8 @@ class FuzzyEspecialistEnsembleClassifier(BaseEstimator, ClassifierMixin):
         fuzzy_m: float = DEFAULT_FUZZY_M,
         fuzzy_error: float = DEFAULT_FUZZY_ERROR,
         fuzzy_max_iter: int = DEFAULT_FUZZY_MAX_ITER,
-        k_range: range = DEFAULT_K_RANGE,
-        fallback_k: int = DEFAULT_FALLBACK_K,
+        c_range: range = DEFAULT_C_RANGE,
+        fallback_c: int = DEFAULT_FALLBACK_C,
         membership_threshold: float = DEFAULT_MEMBERSHIP_THRESHOLD,
         num_subsamples: int = DEFAULT_NUM_SUBSAMPLES,
         min_samples: int = DEFAULT_MIN_SAMPLES,
@@ -82,8 +82,8 @@ class FuzzyEspecialistEnsembleClassifier(BaseEstimator, ClassifierMixin):
         self.fuzzy_m = fuzzy_m
         self.fuzzy_error = fuzzy_error
         self.fuzzy_max_iter = fuzzy_max_iter
-        self.k_range = k_range
-        self.fallback_k = fallback_k
+        self.c_range = c_range
+        self.fallback_c = fallback_c
         self.membership_threshold = membership_threshold
         self.num_subsamples = num_subsamples
         self.min_samples = min_samples
@@ -99,7 +99,7 @@ class FuzzyEspecialistEnsembleClassifier(BaseEstimator, ClassifierMixin):
         """
         self.models = {}
         self.cluster_centers = None
-        self.k = None
+        self.c = None
         self.trained_features = None  # To track column names
         self.classes_ = None          # Track global classes
         self.balanced_datasets = {}   # Store for external access if needed
@@ -107,7 +107,7 @@ class FuzzyEspecialistEnsembleClassifier(BaseEstimator, ClassifierMixin):
         # Extra attributes kept for validation/inspection
         self.raw_cluster_datasets = None
         self.last_y_train = None
-        self.k_optimization_results = None
+        self.c_optimization_results = None
         self.last_training_membership = None
         self.last_training_data_proc = None
 
@@ -124,19 +124,19 @@ class FuzzyEspecialistEnsembleClassifier(BaseEstimator, ClassifierMixin):
             store[name] = store.get(name, 0.0) + (time.perf_counter() - start)
 
     # -------------------------------------------------------------------------
-    # Optimization Logic (Finding K)
+    # Optimization Logic (Finding C)
     # -------------------------------------------------------------------------
     @staticmethod
     def _metric_usable(df_results, metric):
         """
         True if `metric` is a column with at least one real value. A metric can
-        be NaN for every k; idxmax/idxmin raise on an all-NaN column, so such
+        be NaN for every c; idxmax/idxmin raise on an all-NaN column, so such
         metrics simply don't vote.
         """
         return metric in df_results.columns and df_results[metric].notna().any()
 
-    def _find_best_k_heuristic(self, df_results):
-        """Analyzes metrics DataFrame to suggest optimal k."""
+    def _find_best_c_heuristic(self, df_results):
+        """Analyzes metrics DataFrame to suggest optimal c."""
         if df_results.empty:
             print("No metrics calculated.")
             return None
@@ -147,26 +147,26 @@ class FuzzyEspecialistEnsembleClassifier(BaseEstimator, ClassifierMixin):
         max_metrics = ['Silhouette', 'Calinski_Harabasz', 'Dunn', 'FPC', 'MPC']
         for metric in max_metrics:
             if self._metric_usable(df_results, metric):
-                best_k = df_results.loc[df_results[metric].idxmax()]['k']
-                recommendations[metric] = int(best_k)
+                best_c = df_results.loc[df_results[metric].idxmax()]['c']
+                recommendations[metric] = int(best_c)
 
         # MINIMIZE metrics
         min_metrics = ['Davies_Bouldin', 'FPE', 'Xie_Beni', 'Fukuyama_Sugeno']
         for metric in min_metrics:
             if self._metric_usable(df_results, metric):
-                best_k = df_results.loc[df_results[metric].idxmin()]['k']
-                recommendations[metric] = int(best_k)
+                best_c = df_results.loc[df_results[metric].idxmin()]['c']
+                recommendations[metric] = int(best_c)
 
         # ELBOW Method
         if self._metric_usable(df_results, 'Distortion'):
-            x = df_results['k'].values
+            x = df_results['c'].values
             y = df_results['Distortion'].values
             p1 = np.array([x[0], y[0]])
             p2 = np.array([x[-1], y[-1]])
             vec_line = p2 - p1
 
             max_dist = 0
-            best_elbow_k = x[0]
+            best_elbow_c = x[0]
 
             for i in range(len(x)):
                 p3 = np.array([x[i], y[i]])
@@ -175,53 +175,53 @@ class FuzzyEspecialistEnsembleClassifier(BaseEstimator, ClassifierMixin):
                 dist = np.abs(cross_product) / np.linalg.norm(vec_line)
                 if dist > max_dist:
                     max_dist = dist
-                    best_elbow_k = x[i]
+                    best_elbow_c = x[i]
 
-            recommendations['Distortion_Elbow'] = int(best_elbow_k)
+            recommendations['Distortion_Elbow'] = int(best_elbow_c)
 
         if self.detailed_logs:
-            for metric, k_val in recommendations.items():
-                print(f"{metric}: {k_val}")
+            for metric, c_val in recommendations.items():
+                print(f"{metric}: {c_val}")
 
         votes = list(recommendations.values())
         if not votes:
             return None
 
         try:
-            suggested_k = statistics.mode(votes)
-            if self.detailed_logs: print(f"\nConsensus Suggested k: {suggested_k}")
-            return suggested_k
+            suggested_c = statistics.mode(votes)
+            if self.detailed_logs: print(f"\nConsensus Suggested c: {suggested_c}")
+            return suggested_c
         except statistics.StatisticsError:
             fallback = recommendations.get('Silhouette', votes[0])
             if self.detailed_logs: print(f"\nNo clear consensus. Falling back to Silhouette Score: {fallback}")
             return fallback
 
-    def get_best_k(self, X_train_processed):
+    def get_best_c(self, X_train_processed):
         # skfuzzy's cmeans (init=None) and the metrics draw from numpy's global RNG.
-        # Seed it here so the k sweep is reproducible (run_fuzzy_clustering only
-        # seeds later, after k is already chosen).
+        # Seed it here so the c sweep is reproducible (run_fuzzy_clustering only
+        # seeds later, after c is already chosen).
         np.random.seed(self.random_state)
         X_train_values = np.asarray(X_train_processed)
         X_train_T = X_train_values.T
 
         results = []
-        for k in self.k_range:
+        for c in self.c_range:
             try:
-                cntr, u = self._fit_fuzzy_clustering(X_train_T, k)
+                cntr, u = self._fit_fuzzy_clustering(X_train_T, c)
                 metrics_obj = FuzzyClusteringMetrics(X_train_values, u, cntr, self.fuzzy_m)
                 metrics = metrics_obj.calculate_all()
                 results.append(metrics)
             except Exception as e:
-                print(f"An error occurred for k={k}: {e}")
+                print(f"An error occurred for c={c}: {e}")
 
         df_results = pd.DataFrame(results)
-        self.k_optimization_results = df_results
-        return self._find_best_k_heuristic(df_results)
+        self.c_optimization_results = df_results
+        return self._find_best_c_heuristic(df_results)
 
     # -------------------------------------------------------------------------
     # Core Algorithms (Clustering & Sampling)
     # -------------------------------------------------------------------------
-    def _fit_fuzzy_clustering(self, X_T, k, m=None, error=None, max_iter=None):
+    def _fit_fuzzy_clustering(self, X_T, c, m=None, error=None, max_iter=None):
         """
         Runs the fuzzy clustering algorithm itself (currently fuzzy c-means).
 
@@ -230,8 +230,8 @@ class FuzzyEspecialistEnsembleClassifier(BaseEstimator, ClassifierMixin):
             X_T: ndarray, shape (n_features, n_samples) — features x samples,
                  matching skfuzzy's convention.
             returns (centers, membership):
-                centers:    ndarray, shape (k, n_features)
-                membership: ndarray, shape (k, n_samples)
+                centers:    ndarray, shape (c, n_features)
+                membership: ndarray, shape (c, n_samples)
 
         `m`, `error`, `max_iter` are named for fuzzy c-means specifically; a
         different algorithm's override should reinterpret or ignore them.
@@ -241,26 +241,26 @@ class FuzzyEspecialistEnsembleClassifier(BaseEstimator, ClassifierMixin):
         max_iter = self.fuzzy_max_iter if max_iter is None else max_iter
 
         cntr, u, u0, d, jm, p, fpc = fuzz.cmeans(
-            data=X_T, c=k, m=m, error=error, maxiter=max_iter, init=None
+            data=X_T, c=c, m=m, error=error, maxiter=max_iter, init=None
         )
         return cntr, u
 
-    def run_fuzzy_clustering(self, X_train_processed, y_train_fold, k, m=None, error=None, max_iter=None):
+    def run_fuzzy_clustering(self, X_train_processed, y_train_fold, c, m=None, error=None, max_iter=None):
         SEED_VALUE = self.random_state
         np.random.seed(SEED_VALUE)
         X_train_T = np.asarray(X_train_processed).T
 
         try:
-            cntr, u = self._fit_fuzzy_clustering(X_train_T, k, m=m, error=error, max_iter=max_iter)
+            cntr, u = self._fit_fuzzy_clustering(X_train_T, c, m=m, error=error, max_iter=max_iter)
 
             # Store centers for later if needed
             self.cluster_centers = cntr
-            self.k = k
+            self.c = c
 
             X_clustering = pd.DataFrame(X_train_processed).copy()
             X_clustering['target'] = np.asarray(y_train_fold)
 
-            membership_cols = [f'grau_pertencimento_cluster_{i}' for i in range(k)]
+            membership_cols = [f'grau_pertencimento_cluster_{i}' for i in range(c)]
             X_clustering[membership_cols] = u.T
 
             self.last_training_membership = u
@@ -271,7 +271,7 @@ class FuzzyEspecialistEnsembleClassifier(BaseEstimator, ClassifierMixin):
             print(f"\nAn error occurred during FCM execution: {e}")
             return None, None
 
-    def _create_cluster_datasets(self, X_clustering, membership_cols, k, threshold=None, num_subsamples=None, min_samples=None):
+    def _create_cluster_datasets(self, X_clustering, membership_cols, c, threshold=None, num_subsamples=None, min_samples=None):
         threshold = self.membership_threshold if threshold is None else threshold
         num_subsamples = self.num_subsamples if num_subsamples is None else num_subsamples
         min_samples = self.min_samples if min_samples is None else min_samples
@@ -279,13 +279,13 @@ class FuzzyEspecialistEnsembleClassifier(BaseEstimator, ClassifierMixin):
         cluster_datasets = {}
         target_list = X_clustering['target']
 
-        for n in range(num_subsamples // k):
+        for n in range(num_subsamples // c):
 
             # Generate a unique seed for this specific iteration sequence
             # If self.random_state is 42, iteration 0 is 42, iteration 1 is 43, etc.
             current_seed = self.random_state + n if self.random_state is not None else None
 
-            for i in range(k):
+            for i in range(c):
                 cluster_name = f'cluster_{i}_{n}_data'
                 membership_prob_col = membership_cols[i]
                 probabilities = X_clustering[membership_prob_col]
@@ -363,7 +363,7 @@ class FuzzyEspecialistEnsembleClassifier(BaseEstimator, ClassifierMixin):
     def fit(self, X_train, y_train):
         """
         Main orchestration method:
-        1. Find K
+        1. Find C
         2. Cluster
         3. Create Sub-Datasets (Weighted + Balanced)
         4. Train Ensemble
@@ -381,19 +381,19 @@ class FuzzyEspecialistEnsembleClassifier(BaseEstimator, ClassifierMixin):
             self.last_y_train = np.asarray(y_train)
             self.last_training_data_proc = X_train
 
-            # Find Best K (if not set manually, currently calculated dynamically)
-            with self._timer(t, 'find_best_k'):
-                suggested_k = self.get_best_k(X_train)
-            if suggested_k is None:
-                suggested_k = self.fallback_k
+            # Find Best C (if not set manually, currently calculated dynamically)
+            with self._timer(t, 'find_best_c'):
+                suggested_c = self.get_best_c(X_train)
+            if suggested_c is None:
+                suggested_c = self.fallback_c
 
             if self.c_override is not None:
-                suggested_k = self.c_override
+                suggested_c = self.c_override
 
             # Fuzzy Clustering
             with self._timer(t, 'fuzzy_clustering'):
                 X_clustering, membership_cols = self.run_fuzzy_clustering(
-                    X_train, y_train, k=suggested_k
+                    X_train, y_train, c=suggested_c
                 )
 
             if X_clustering is None:
@@ -402,7 +402,7 @@ class FuzzyEspecialistEnsembleClassifier(BaseEstimator, ClassifierMixin):
             # Dataset Creation (Weighted Bootstrapping)
             with self._timer(t, 'create_cluster_datasets'):
                 cluster_datasets = self._create_cluster_datasets(
-                    X_clustering, membership_cols, suggested_k
+                    X_clustering, membership_cols, suggested_c
                 )
 
             self.raw_cluster_datasets = cluster_datasets

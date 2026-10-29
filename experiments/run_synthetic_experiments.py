@@ -40,11 +40,11 @@ from src.model_variants.Changes_Clustering_Algorithm import (
     GMMEspecialistEnsembleClassifier,
     PossibilisticCMeansEspecialistEnsembleClassifier,
 )
-from src.model_variants.Changes_Find_K_Method import (FastKSelectionEnsembleClassifier, 
-                                                      CVKSelectionEnsembleClassifier, 
-                                                      SupervisedEntropyKSelectionEnsembleClassifier,
-                                                      StabilityKSelectionEnsembleClassifier,
-                                                      GapStatisticKSelectionEnsembleClassifier)
+from src.model_variants.Changes_Find_C_Method import (FastCSelectionEnsembleClassifier, 
+                                                      CVCSelectionEnsembleClassifier, 
+                                                      SupervisedEntropyCSelectionEnsembleClassifier,
+                                                      StabilityCSelectionEnsembleClassifier,
+                                                      GapStatisticCSelectionEnsembleClassifier)
 # Perceptron variant is disabled for now.
 # from src.model_variants.Changes_Base_Classifier import PerceptronEspecialistEnsembleClassifier
 from src.baselines.baselines_decision_tree import (
@@ -82,15 +82,15 @@ MODEL_REGISTRY = {
     # "Fuzzy_m1.5": lambda random_state: FuzzyEspecialistEnsembleClassifier(random_state=random_state, fuzzy_m=1.5),
     # "Fuzzy_m2.5": lambda random_state: FuzzyEspecialistEnsembleClassifier(random_state=random_state, fuzzy_m=2.5),
     # "Fuzzy_m3": lambda random_state: FuzzyEspecialistEnsembleClassifier(random_state=random_state, fuzzy_m=3),
-    # # Clustering-algorithm / k-selection / base-classifier variants.
+    # # Clustering-algorithm / c-selection / base-classifier variants.
     # "GMMEspecialistEnsembleClassifier": lambda random_state: GMMEspecialistEnsembleClassifier(random_state=random_state),
     # "FuzzyKMedoidsEspecialistEnsembleClassifier": lambda random_state: FuzzyKMedoidsEspecialistEnsembleClassifier(random_state=random_state),
     # "PossibilisticCMeansEspecialistEnsembleClassifier": lambda random_state: PossibilisticCMeansEspecialistEnsembleClassifier(random_state=random_state),
-    # "FastKSelectionEnsembleClassifier": lambda random_state: FastKSelectionEnsembleClassifier(random_state=random_state),
-    # "CVKSelectionEnsembleClassifier": lambda random_state: CVKSelectionEnsembleClassifier(random_state=random_state),
-    # "SupervisedEntropyKSelectionEnsembleClassifier": lambda random_state: SupervisedEntropyKSelectionEnsembleClassifier(random_state=random_state),
-    # "StabilityKSelectionEnsembleClassifier": lambda random_state: StabilityKSelectionEnsembleClassifier(random_state=random_state),
-    # "GapStatisticKSelectionEnsembleClassifier": lambda random_state: GapStatisticKSelectionEnsembleClassifier(random_state=random_state),
+    # "FastCSelectionEnsembleClassifier": lambda random_state: FastCSelectionEnsembleClassifier(random_state=random_state),
+    # "CVCSelectionEnsembleClassifier": lambda random_state: CVCSelectionEnsembleClassifier(random_state=random_state),
+    # "SupervisedEntropyCSelectionEnsembleClassifier": lambda random_state: SupervisedEntropyCSelectionEnsembleClassifier(random_state=random_state),
+    # "StabilityCSelectionEnsembleClassifier": lambda random_state: StabilityCSelectionEnsembleClassifier(random_state=random_state),
+    # "GapStatisticCSelectionEnsembleClassifier": lambda random_state: GapStatisticCSelectionEnsembleClassifier(random_state=random_state),
     #"PerceptronEspecialistEnsembleClassifier": lambda random_state: PerceptronEspecialistEnsembleClassifier(random_state=random_state),
     # Baselines.
     # "DecisionTree": lambda random_state: DecisionTreeBaseline(random_state=random_state),
@@ -192,8 +192,8 @@ def recover_cluster_labels(dataset_params: dict, X_shuffled: np.ndarray) -> np.n
         weights = [1.0 / n_classes] * n_classes
     elif len(weights) == n_classes - 1:
         weights = list(weights) + [1.0 - sum(weights)]
-    counts = [int(n_samples * weights[k % n_classes] / n_clusters_per_class)
-              for k in range(n_clusters)]
+    counts = [int(n_samples * weights[c % n_classes] / n_clusters_per_class)
+              for c in range(n_clusters)]
     for i in range(n_samples - sum(counts)):
         counts[i % n_clusters] += 1
     ordered_clusters = np.repeat(np.arange(n_clusters), counts)
@@ -252,7 +252,7 @@ def compute_ari(model, clusters_train):
 
 def _summarize_timings(prefix: str, fold_timings: list) -> dict:
     """
-    fold_timings: one dict per successful fold, e.g. [{'find_best_k': 12.4, ...}, ...]
+    fold_timings: one dict per successful fold, e.g. [{'find_best_c': 12.4, ...}, ...]
     Returns {f'{prefix}_{stage}_mean_s': ..., f'{prefix}_{stage}_std_s': ...}.
     Stages missing in a fold (or models without timings, like the baselines)
     are ignored / simply produce no columns.
@@ -269,7 +269,7 @@ def run_one_model(model_name: str, X, y, skf: StratifiedKFold, random_state: int
     """Runs k-fold CV for a single model, returning summary stats. Any
     exception during a fold is caught and recorded."""
     fold_acc, fold_auc, fold_train_time, fold_infer_time = [], [], [], []
-    fold_ari, fold_k = [], []
+    fold_ari, fold_c = [], []
     fold_fit_stages, fold_predict_stages = [], [] 
 
     for fold_idx, (train_idx, test_idx) in enumerate(skf.split(X, y), 1):
@@ -300,7 +300,7 @@ def run_one_model(model_name: str, X, y, skf: StratifiedKFold, random_state: int
             fold_acc.append(acc)
             fold_auc.append(auc)
             fold_ari.append(ari)
-            fold_k.append(getattr(model, "k", None) or np.nan)
+            fold_c.append(getattr(model, "c", None) or np.nan)
             fold_train_time.append(train_time)
             fold_infer_time.append(infer_time)
             fold_fit_stages.append(fit_stages)
@@ -320,7 +320,7 @@ def run_one_model(model_name: str, X, y, skf: StratifiedKFold, random_state: int
             "auc_std": np.nan,
             "ari_mean": np.nan,
             "ari_std": np.nan,
-            "k_mean": np.nan,
+            "c_mean": np.nan,
             "train_time_mean_s": np.nan,
             "train_time_std_s": np.nan,
             "inference_time_mean_s": np.nan,
@@ -336,7 +336,7 @@ def run_one_model(model_name: str, X, y, skf: StratifiedKFold, random_state: int
         "auc_std": float(np.nanstd(fold_auc)) if not np.all(np.isnan(fold_auc)) else np.nan,
         "ari_mean": float(np.nanmean(fold_ari)) if not np.all(np.isnan(fold_ari)) else np.nan,
         "ari_std": float(np.nanstd(fold_ari)) if not np.all(np.isnan(fold_ari)) else np.nan,
-        "k_mean": float(np.nanmean(fold_k)) if not np.all(np.isnan(fold_k)) else np.nan,
+        "c_mean": float(np.nanmean(fold_c)) if not np.all(np.isnan(fold_c)) else np.nan,
         "train_time_mean_s": float(np.mean(fold_train_time)),
         "train_time_std_s": float(np.std(fold_train_time)),
         "inference_time_mean_s": float(np.mean(fold_infer_time)),

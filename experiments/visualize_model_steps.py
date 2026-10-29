@@ -4,7 +4,7 @@ Step-by-step visualization of the fuzzy specialist ensemble.
 Figures go to `outputs/<experiment name>/viz/<model name>/`:
 
   Part A - the pipeline
-    00_k_selection.png               clustering metrics vs k, chosen k marked
+    00_c_selection.png               clustering metrics vs c, chosen c marked
     01_raw_data.png                  training data before anything runs
     02_clustering.png                hard cluster + membership strength, centroids
     03_classes_vs_centroids.png      classes vs centroids, class mix per cluster
@@ -96,7 +96,7 @@ class VariantInfo(NamedTuple):
     normalised: bool        # do a point's scores sum to 1 across clusters?
     uses_m: bool            # does fuzzy_m mean anything for this model?
     show_agreement: bool    # footnote: strongest-score cluster vs nearest centroid
-    k_note: "str | None"    # footnote for figure 00
+    c_note: "str | None"    # footnote for figure 00
 
 
 def variant_info(model):
@@ -215,12 +215,12 @@ def note_hidden(fig, proj, extra=None):
 # --------------------------------------------------------------------------
 def collect(model, X_test, y_test, min_cell):
     classes = model.classes_
-    k = model.k
+    c = model.c
     centers = model.cluster_centers
     region = np.argmin(cdist(X_test, centers), axis=1)  # nearest centroid = how predict() weights clusters
 
     cluster_proba, trees, tree_correct = {}, [], {}
-    for i in range(k):
+    for i in range(c):
         tree_list = model.models.get(f"cluster_{i}", [])
         probas = [full_proba(t, X_test, classes) for t in tree_list]
         mask = region == i
@@ -238,29 +238,29 @@ def collect(model, X_test, y_test, min_cell):
 
     # matrix[X, Y]: accuracy of cluster Y's ensemble on test points nearest cluster X.
     # The extra last column is the full weighted model on the same points.
-    acc = np.full((k, k + 1), np.nan)
-    cnt = np.zeros(k, dtype=int)
-    for x in range(k):
+    acc = np.full((c, c + 1), np.nan)
+    cnt = np.zeros(c, dtype=int)
+    for x in range(c):
         mask = region == x
         cnt[x] = int(mask.sum())
         if cnt[x] == 0:
             continue
-        for y in range(k):
+        for y in range(c):
             if cluster_proba[y] is not None:
                 acc[x, y] = score(y_test[mask], cluster_proba[y][mask], classes)[0]
-        acc[x, k] = score(y_test[mask], full[mask], classes)[0]
+        acc[x, c] = score(y_test[mask], full[mask], classes)[0]
 
     # right/wrong per test point for each cluster's ensemble, last row = full model
     n_test = len(y_test)
-    correct_by_cluster = np.zeros((k + 1, n_test), dtype=bool)
-    for i in range(k):
+    correct_by_cluster = np.zeros((c + 1, n_test), dtype=bool)
+    for i in range(c):
         if cluster_proba[i] is not None:
             correct_by_cluster[i] = classes[np.argmax(cluster_proba[i], axis=1)] == y_test
-    correct_by_cluster[k] = classes[np.argmax(full, axis=1)] == y_test
+    correct_by_cluster[c] = classes[np.argmax(full, axis=1)] == y_test
 
     cluster_scores = {i: (score(y_test, p, classes) if p is not None else (np.nan, np.nan))
                       for i, p in cluster_proba.items()}
-    return dict(classes=classes, k=k, region=region, trees=pd.DataFrame(trees), full=full,
+    return dict(classes=classes, c=c, region=region, trees=pd.DataFrame(trees), full=full,
                 full_acc=full_acc, full_auc=full_auc, matrix=acc, region_n=cnt,
                 cluster_scores=cluster_scores, min_cell=min_cell,
                 tree_correct=tree_correct, correct_by_cluster=correct_by_cluster)
@@ -293,28 +293,28 @@ Q_LABEL = "Yule's Q  (+1 same errors, 0 independent, -1 complementary)"
 # --------------------------------------------------------------------------
 # Part A
 # --------------------------------------------------------------------------
-def fig_k_selection(model, out_dir, info):
-    df = model.k_optimization_results
-    if df is None or len(df) == 0 or "k" not in df:
-        print("  (no k-selection results stored; skipping 00)")
+def fig_c_selection(model, out_dir, info):
+    df = model.c_optimization_results
+    if df is None or len(df) == 0 or "c" not in df:
+        print("  (no c-selection results stored; skipping 00)")
         return
-    metrics = [c for c in df.columns if c != "k" and pd.api.types.is_numeric_dtype(df[c])]
+    metrics = [c for c in df.columns if c != "c" and pd.api.types.is_numeric_dtype(df[c])]
     ncols = 4
     nrows = int(np.ceil(len(metrics) / ncols))
     fig, axes = plt.subplots(nrows, ncols, figsize=(3.3 * ncols, 2.4 * nrows), squeeze=False)
     for ax, m in zip(axes.ravel(), metrics):
-        ax.plot(df["k"], df[m], color=CAT[0], lw=2, marker="o", ms=4)
-        ax.axvline(model.k, color=INK2, ls="--", lw=1)
+        ax.plot(df["c"], df[m], color=CAT[0], lw=2, marker="o", ms=4)
+        ax.axvline(model.c, color=INK2, ls="--", lw=1)
         ax.set_title(m.replace("_", " "), fontsize=9.5)
-        ax.set_xticks(df["k"])
+        ax.set_xticks(df["c"])
     for ax in axes.ravel()[len(metrics):]:
         ax.axis("off")
-    fig.suptitle(f"Choosing k - clustering metrics per k (dashed = chosen k = {model.k})",
+    fig.suptitle(f"Choosing c - clustering metrics per c (dashed = chosen c = {model.c})",
                  x=0.01, ha="left", fontsize=12, fontweight="bold")
     fig.tight_layout()
-    if info.k_note:
-        fig.text(0.01, -0.01, info.k_note, fontsize=8, color=INK2, ha="left", va="top", wrap=True)
-    save(fig, out_dir, "00_k_selection.png")
+    if info.c_note:
+        fig.text(0.01, -0.01, info.c_note, fontsize=8, color=INK2, ha="left", va="top", wrap=True)
+    save(fig, out_dir, "00_c_selection.png")
 
 
 def fig_raw(proj, y_train, classes, colors, out_dir):
@@ -340,12 +340,12 @@ def fig_raw(proj, y_train, classes, colors, out_dir):
     save(fig, out_dir, "01_raw_data.png")
 
 
-def fig_clustering(proj, membership, k, out_dir, info, agree_note=None):
+def fig_clustering(proj, membership, c, out_dir, info, agree_note=None):
     hard = membership.argmax(axis=0)
     strength = membership.max(axis=0)
-    if info.normalised:  # scores sum to 1, so 1/k is the "fully ambiguous" level
-        norm = np.clip((strength - 1 / k) / (1 - 1 / k + 1e-12), 0, 1)
-    else:                # PCM typicalities: use the raw value, there is no 1/k baseline
+    if info.normalised:  # scores sum to 1, so 1/c is the "fully ambiguous" level
+        norm = np.clip((strength - 1 / c) / (1 - 1 / c + 1e-12), 0, 1)
+    else:                # PCM typicalities: use the raw value, there is no 1/c baseline
         norm = np.clip(strength, 0, 1)
     rgba = np.array([to_rgba(cluster_color(c), 0.22 + 0.78 * a) for c, a in zip(hard, norm)])
     fig, ax = plt.subplots(figsize=(9.5, 5.4))
@@ -354,17 +354,17 @@ def fig_clustering(proj, membership, k, out_dir, info, agree_note=None):
     proj.style(ax)
     ax.set_title(f"After clustering ({info.algo}): colour = strongest {info.word}, opacity = strength")
     handles = [Line2D([], [], marker="o", ls="", mfc=cluster_color(i), mec="none", ms=8, label=f"Cluster {i}")
-               for i in range(k)] + [centroid_legend_handle()]
-    ax.legend(handles=handles, loc="best", ncol=2 if k > 5 else 1)
+               for i in range(c)] + [centroid_legend_handle()]
+    ax.legend(handles=handles, loc="best", ncol=2 if c > 5 else 1)
     note_hidden(fig, proj, agree_note)
     fig.tight_layout()
     save(fig, out_dir, "02_clustering.png")
 
 
-def fig_classes_vs_centroids(proj, membership, y_train, classes, colors, k, out_dir, agree_note=None):
+def fig_classes_vs_centroids(proj, membership, y_train, classes, colors, c, out_dir, agree_note=None):
     hard = membership.argmax(axis=0)
     fig, (ax, bx) = plt.subplots(1, 2, figsize=(12, 5), gridspec_kw=dict(width_ratios=[2.4, 1.6]))
-    for i in range(k):
+    for i in range(c):
         m = hard == i
         ax.scatter(proj.train[m, 0], proj.train[m, 1], s=22, marker=MARKERS[i % len(MARKERS)],
                    c=[colors[c] for c in y_train[m]], edgecolors=SURFACE, linewidths=0.4, alpha=0.85)
@@ -374,22 +374,22 @@ def fig_classes_vs_centroids(proj, membership, y_train, classes, colors, k, out_
     h1 = ax.legend(handles=class_legend_handles(classes, colors), loc="upper left")
     ax.add_artist(h1)
     shapes = [Line2D([], [], marker=MARKERS[i % len(MARKERS)], ls="", mfc=MUTED, mec=INK2, ms=7, label=f"Cluster {i}")
-              for i in range(k)] + [centroid_legend_handle()]
-    ax.legend(handles=shapes, loc="upper right", ncol=2 if k > 5 else 1)
+              for i in range(c)] + [centroid_legend_handle()]
+    ax.legend(handles=shapes, loc="upper right", ncol=2 if c > 5 else 1)
 
     # Class mix the sampler targets in each cluster (normalised mean membership per class).
-    x = np.arange(k)
-    bottoms = np.zeros(k)
-    mix = np.zeros((k, len(classes)))
-    for i in range(k):
+    x = np.arange(c)
+    bottoms = np.zeros(c)
+    mix = np.zeros((c, len(classes)))
+    for i in range(c):
         means = np.array([membership[i][y_train == c].mean() for c in classes])
         mix[i] = means / means.sum() if means.sum() > 0 else 1 / len(classes)
-    for j, c in enumerate(classes):
-        bx.bar(x, mix[:, j], bottom=bottoms, color=colors[c], width=0.7, edgecolor=SURFACE, linewidth=2)
-        for i in range(k):
+    for j, cls in enumerate(classes):
+        bx.bar(x, mix[:, j], bottom=bottoms, color=colors[cls], width=0.7, edgecolor=SURFACE, linewidth=2)
+        for i in range(c):
             if mix[i, j] > 0.1:
                 bx.text(i, bottoms[i] + mix[i, j] / 2, f"{mix[i, j]:.0%}", ha="center", va="center",
-                        fontsize=8.5, color=text_on(to_rgba(colors[c])))
+                        fontsize=8.5, color=text_on(to_rgba(colors[cls])))
         bottoms += mix[:, j]
     bx.set_xticks(x)
     bx.set_xlabel("Cluster")
@@ -402,14 +402,14 @@ def fig_classes_vs_centroids(proj, membership, y_train, classes, colors, k, out_
     save(fig, out_dir, "03_classes_vs_centroids.png")
 
 
-def fig_subsamples(proj, model, y_train, classes, colors, k, sub_idx, out_dir):
+def fig_subsamples(proj, model, y_train, classes, colors, c, sub_idx, out_dir):
     avail = len(model.models.get("cluster_0", []))
     sub_idx = [n for n in sub_idx if n < avail]
     if not sub_idx:
         print("  (no subsamples available; skipping 04)")
         return
-    fig, axes = plt.subplots(k, len(sub_idx), figsize=(4.8 * len(sub_idx), 3.7 * k), squeeze=False)
-    for i in range(k):
+    fig, axes = plt.subplots(c, len(sub_idx), figsize=(4.8 * len(sub_idx), 3.7 * c), squeeze=False)
+    for i in range(c):
         for col, n in enumerate(sub_idx):
             ax = axes[i, col]
             ax.scatter(proj.train[:, 0], proj.train[:, 1], s=6, c=MUTED, alpha=0.5, edgecolors="none")
@@ -424,26 +424,26 @@ def fig_subsamples(proj, model, y_train, classes, colors, k, sub_idx, out_dir):
             proj.style(ax)
             if col:
                 ax.set_ylabel("")
-            if i < k - 1:
+            if i < c - 1:
                 ax.set_xlabel("")
     fig.legend(handles=class_legend_handles(classes, colors) + [
         Line2D([], [], marker="o", ls="", mfc=MUTED, mec="none", ms=6, label="Not drawn (all training data)"),
-        centroid_legend_handle()], loc="upper center", ncol=5, bbox_to_anchor=(0.5, 1.0 + 0.02 / max(k, 1) * 3))
+        centroid_legend_handle()], loc="upper center", ncol=5, bbox_to_anchor=(0.5, 1.0 + 0.02 / max(c, 1) * 3))
     fig.text(0.5, -0.005, "Marker size grows with the number of times an instance was drawn (sampling is with replacement).",
              ha="center", va="top", fontsize=8.5, color=INK2)
     fig.tight_layout()
     save(fig, out_dir, "04_subsamples.png")
 
 
-def fig_membership_density(model, membership, k, out_dir, info):
+def fig_membership_density(model, membership, c, out_dir, info):
     """Density of every training point's membership in each cluster, with the
     threshold the sampler uses to decide which points count as 'in' the cluster."""
     thr = model.membership_threshold
-    ncols = min(k, 4)
-    nrows = int(np.ceil(k / ncols))
+    ncols = min(c, 4)
+    nrows = int(np.ceil(c / ncols))
     fig, axes = plt.subplots(nrows, ncols, figsize=(3.9 * ncols, 3.3 * nrows), squeeze=False, sharex=True)
     xs = np.linspace(0, 1, 400)
-    for i in range(k):
+    for i in range(c):
         ax = axes[i // ncols, i % ncols]
         u = membership[i]
         try:
@@ -461,11 +461,11 @@ def fig_membership_density(model, membership, k, out_dir, info):
         ax.set_ylim(bottom=0)
         ax.set_yticks([])
         ax.grid(axis="y", visible=False)
-        if i // ncols == nrows - 1 or i + ncols >= k:
+        if i // ncols == nrows - 1 or i + ncols >= c:
             ax.set_xlabel(f"{info.word.capitalize()} in cluster")
         if i % ncols == 0:
             ax.set_ylabel("Density")
-    for j in range(k, nrows * ncols):
+    for j in range(c, nrows * ncols):
         axes[j // ncols, j % ncols].axis("off")
     fig.suptitle(f"{info.word.capitalize()} density per cluster (dotted line = threshold {thr:g}: points above it count as in the cluster)",
                  x=0.01, ha="left", fontsize=11.5, fontweight="bold")
@@ -502,15 +502,15 @@ def fig_final(proj, y_test, pred, classes, colors, out_dir):
 # --------------------------------------------------------------------------
 # Part B
 # --------------------------------------------------------------------------
-def fig_q_within(res, k, out_dir):
+def fig_q_within(res, c, out_dir):
     """One Q matrix per cluster: how much the trees trained on that cluster's
     subsamples make the same mistakes as each other."""
-    ncols = min(k, 4)
-    nrows = int(np.ceil(k / ncols))
+    ncols = min(c, 4)
+    nrows = int(np.ceil(c / ncols))
     fig, axes = plt.subplots(nrows, ncols, figsize=(3.9 * ncols + 1.2, 3.8 * nrows),
                              squeeze=False, constrained_layout=True)
     im = None
-    for i in range(k):
+    for i in range(c):
         ax = axes[i // ncols, i % ncols]
         C = res["tree_correct"][i]
         T = len(C)
@@ -538,7 +538,7 @@ def fig_q_within(res, k, out_dir):
         ax.grid(False)
         for sp in ax.spines.values():
             sp.set_visible(False)
-    for j in range(k, nrows * ncols):
+    for j in range(c, nrows * ncols):
         axes[j // ncols, j % ncols].axis("off")
     if im is not None:
         cb = fig.colorbar(im, ax=axes.ravel().tolist(), shrink=0.8, pad=0.02)
@@ -549,11 +549,11 @@ def fig_q_within(res, k, out_dir):
     save(fig, out_dir, "07_q_within_cluster.png")
 
 
-def fig_q_between(res, k, out_dir):
+def fig_q_between(res, c, out_dir):
     """Q between cluster ensembles: each cluster's trees are averaged into one
     prediction first. The last row/column is the full weighted model."""
     Q = qstat_matrix(res["correct_by_cluster"])
-    n = k + 1
+    n = c + 1
     fig, ax = plt.subplots(figsize=(0.95 * n + 3.4, 0.8 * n + 2.4))
     for x in range(n):
         for y in range(n):
@@ -566,9 +566,9 @@ def fig_q_between(res, k, out_dir):
                 ax.text(y + 0.5, x + 0.5, f"{v:.2f}", ha="center", va="center", fontsize=9, color=text_on(face))
             elif not diag:
                 ax.text(y + 0.5, x + 0.5, "n/a", ha="center", va="center", fontsize=8.5, color=INK2)
-    ax.axhline(k, color=SURFACE, lw=5)  # set the full model apart
-    ax.axvline(k, color=SURFACE, lw=5)
-    labels = [f"Cluster {i}" for i in range(k)] + ["Full model"]
+    ax.axhline(c, color=SURFACE, lw=5)  # set the full model apart
+    ax.axvline(c, color=SURFACE, lw=5)
+    labels = [f"Cluster {i}" for i in range(c)] + ["Full model"]
     ax.set_xlim(0, n)
     ax.set_ylim(n, 0)
     ax.set_xticks(np.arange(n) + 0.5)
@@ -588,13 +588,13 @@ def fig_q_between(res, k, out_dir):
     save(fig, out_dir, "08_q_between_clusters.png")
 
 
-def fig_matrix(res, k, n_classes, out_dir):
+def fig_matrix(res, c, n_classes, out_dir):
     M, cnt, min_cell = res["matrix"], res["region_n"], res["min_cell"]
     cmap = LinearSegmentedColormap.from_list("blue_seq", SEQ)
     vmin = 1 / n_classes
-    fig, ax = plt.subplots(figsize=(1.0 * (k + 1) + 3.2, 0.8 * k + 2.6))
-    for x in range(k):
-        for y in range(k + 1):
+    fig, ax = plt.subplots(figsize=(1.0 * (c + 1) + 3.2, 0.8 * c + 2.6))
+    for x in range(c):
+        for y in range(c + 1):
             v = M[x, y]
             small = cnt[x] < min_cell
             ok = not (np.isnan(v) or small)
@@ -603,14 +603,14 @@ def fig_matrix(res, k, n_classes, out_dir):
             txt = f"{v:.2f}\nn={cnt[x]}" if ok else f"n={cnt[x]}"
             ax.text(y + 0.5, x + 0.5, txt, ha="center", va="center", fontsize=8.5,
                     color=text_on(face) if ok else INK2)
-    for x in range(k):  # own-cluster diagonal
+    for x in range(c):  # own-cluster diagonal
         ax.add_patch(Rectangle((x, x), 1, 1, fill=False, edgecolor=INK, linewidth=2.2, zorder=5))
-    ax.set_xlim(0, k + 1)
-    ax.set_ylim(k, 0)
-    ax.set_xticks(np.arange(k + 1) + 0.5)
-    ax.set_xticklabels([f"Cluster {y}" for y in range(k)] + ["Full model"], rotation=30, ha="right")
-    ax.set_yticks(np.arange(k) + 0.5)
-    ax.set_yticklabels([f"Nearest to {x}" for x in range(k)])
+    ax.set_xlim(0, c + 1)
+    ax.set_ylim(c, 0)
+    ax.set_xticks(np.arange(c + 1) + 0.5)
+    ax.set_xticklabels([f"Cluster {y}" for y in range(c)] + ["Full model"], rotation=30, ha="right")
+    ax.set_yticks(np.arange(c) + 0.5)
+    ax.set_yticklabels([f"Nearest to {x}" for x in range(c)])
     ax.set_xlabel("Classifier: cluster Y's subsample trees (outlined = own cluster)")
     ax.set_ylabel("Test points, grouped by nearest centroid X")
     ax.grid(False)
@@ -643,15 +643,15 @@ def run_model(name, X_train, X_test, y_train, y_test, seed, args, out_dir):
         else:
             print(f"  note: --fuzzy-m ignored, {name} has no fuzzifier m")
     model.fit(X_train, y_train)
-    classes, k = model.classes_, model.k
+    classes, c = model.classes_, model.c
     colors = {c: CAT[i % len(CAT)] for i, c in enumerate(classes)}
-    membership = np.asarray(model.last_training_membership)  # (k, n_train)
-    degenerate = float(membership.max(axis=0).mean()) < 1 / k + 0.01
+    membership = np.asarray(model.last_training_membership)  # (c, n_train)
+    degenerate = float(membership.max(axis=0).mean()) < 1 / c + 0.01
     if degenerate:
         print(f"  WARNING: degenerate clustering - mean largest membership {membership.max(axis=0).mean():.4f} "
-              f"is ~1/k = {1 / k:.4f}. Centroids collapse toward the data mean (fuzzy_m={model.fuzzy_m}); "
+              f"is ~1/c = {1 / c:.4f}. Centroids collapse toward the data mean (fuzzy_m={model.fuzzy_m}); "
               f"clusters are near-identical and every cluster's trees see ~the same data. Try --fuzzy-m 1.2.")
-    print(f"  train={len(X_train)} test={len(X_test)} k={k} trees={sum(len(v) for v in model.models.values())}")
+    print(f"  train={len(X_train)} test={len(X_test)} c={c} trees={sum(len(v) for v in model.models.values())}")
 
     agree_note = None
     if info.show_agreement:
@@ -664,29 +664,29 @@ def run_model(name, X_train, X_test, y_train, y_test, seed, args, out_dir):
     res = collect(model, X_test, y_test, args.min_cell)
     pred = classes[np.argmax(res["full"], axis=1)]
 
-    fig_k_selection(model, out_dir, info)
+    fig_c_selection(model, out_dir, info)
     fig_raw(proj, y_train, classes, colors, out_dir)
-    fig_clustering(proj, membership, k, out_dir, info, agree_note)
-    fig_classes_vs_centroids(proj, membership, y_train, classes, colors, k, out_dir, agree_note)
-    fig_subsamples(proj, model, y_train, classes, colors, k, args.subsamples, out_dir)
-    fig_membership_density(model, membership, k, out_dir, info)
+    fig_clustering(proj, membership, c, out_dir, info, agree_note)
+    fig_classes_vs_centroids(proj, membership, y_train, classes, colors, c, out_dir, agree_note)
+    fig_subsamples(proj, model, y_train, classes, colors, c, args.subsamples, out_dir)
+    fig_membership_density(model, membership, c, out_dir, info)
     fig_final(proj, y_test, pred, classes, colors, out_dir)
-    fig_q_within(res, k, out_dir)
-    fig_q_between(res, k, out_dir)
-    fig_matrix(res, k, len(classes), out_dir)
+    fig_q_within(res, c, out_dir)
+    fig_q_between(res, c, out_dir)
+    fig_matrix(res, c, len(classes), out_dir)
 
     res["trees"].to_csv(out_dir / "tree_metrics.csv", index=False)
-    cols = [f"classified_by_cluster_{y}" for y in range(k)] + ["classified_by_full_model"]
+    cols = [f"classified_by_cluster_{y}" for y in range(c)] + ["classified_by_full_model"]
     mat = pd.DataFrame(res["matrix"], columns=cols)
     mat.insert(0, "n_test_points", res["region_n"])
-    mat.index = [f"nearest_to_cluster_{x}" for x in range(k)]
+    mat.index = [f"nearest_to_cluster_{x}" for x in range(c)]
     mat.to_csv(out_dir / "cross_cluster_matrix.csv")
 
-    names = [f"cluster_{i}" for i in range(k)] + ["full_model"]
+    names = [f"cluster_{i}" for i in range(c)] + ["full_model"]
     pd.DataFrame(qstat_matrix(res["correct_by_cluster"]), index=names, columns=names).to_csv(
         out_dir / "q_between_clusters.csv")
     rows = []
-    for i in range(k):
+    for i in range(c):
         Qi = qstat_matrix(res["tree_correct"][i]) if len(res["tree_correct"][i]) else np.empty((0, 0))
         rows += [dict(cluster=i, tree_a=a, tree_b=b, q=Qi[a, b])
                  for a in range(len(Qi)) for b in range(a + 1, len(Qi))]

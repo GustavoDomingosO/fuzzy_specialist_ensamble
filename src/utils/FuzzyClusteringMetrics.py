@@ -23,7 +23,7 @@ class FuzzyClusteringMetrics:
         self.n_unique_labels = len(np.unique(self.hard_labels))
         
         # Performance Optimization: Cache pairwise distances
-        # This prevents redundant O(N*K) calculations in multiple metrics
+        # This prevents redundant O(N*C) calculations in multiple metrics
         self.dists_sq = cdist(self.X, self.centers, metric='sqeuclidean')
         self.dists = np.sqrt(self.dists_sq)
 
@@ -58,9 +58,9 @@ class FuzzyClusteringMetrics:
         # Max diameter of clusters (approximation using distance to center)
         # Optimized to use the cached distance matrix
         max_diameter = 0
-        for k in range(self.n_clusters):
-            # Fetch pre-calculated distances from points in cluster 'k' to center 'k'
-            cluster_dists = self.dists[self.hard_labels == k, k]
+        for c in range(self.n_clusters):
+            # Fetch pre-calculated distances from points in cluster 'c' to center 'c'
+            cluster_dists = self.dists[self.hard_labels == c, c]
             if len(cluster_dists) > 0:
                 # Max distance from center * 2 is a rough diameter proxy
                 d = np.max(cluster_dists)
@@ -118,7 +118,7 @@ class FuzzyClusteringMetrics:
 
     def calculate_all(self):
         return {
-            'k': self.n_clusters,
+            'c': self.n_clusters,
             'Distortion': self.get_distortion(),
             'Silhouette': self.get_silhouette(),
             'Calinski_Harabasz': self.get_calinski_harabasz(),

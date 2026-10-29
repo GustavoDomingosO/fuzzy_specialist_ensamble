@@ -5,12 +5,12 @@ Base_Model.py is used as a base class so we can alter just one method per varian
 
 Section 1 (clustering algorithm): each class changes only the fuzzy
 clustering algorithm itself, by overriding `_fit_fuzzy_clustering`, the method
-both `get_best_k` (evaluating candidate k values) and `run_fuzzy_clustering`
+both `get_best_c` (evaluating candidate c values) and `run_fuzzy_clustering`
 (the final clustering used for training) call through. Everything else is inherited unchanged.
 All three still return a (centers, membership) pair in the base class's
 contract shape:
-    centers:    ndarray, shape (k, n_features)
-    membership: ndarray, shape (k, n_samples)
+    centers:    ndarray, shape (c, n_features)
+    membership: ndarray, shape (c, n_samples)
 """
 
 import numpy as np
@@ -38,21 +38,21 @@ class GMMEspecialistEnsembleClassifier(FuzzyEspecialistEnsembleClassifier):
     iterating" role.
     """
 
-    def _fit_fuzzy_clustering(self, X_T, k, m=None, error=None, max_iter=None):
+    def _fit_fuzzy_clustering(self, X_T, c, m=None, error=None, max_iter=None):
         error = self.fuzzy_error if error is None else error
         max_iter = self.fuzzy_max_iter if max_iter is None else max_iter
 
         X = X_T.T  # GaussianMixture expects (n_samples, n_features)
         gmm = GaussianMixture(
-            n_components=k,
+            n_components=c,
             tol=error,
             max_iter=max_iter,
             random_state=self.random_state,
         )
         gmm.fit(X)
 
-        membership = gmm.predict_proba(X).T  # (n_samples, k) -> (k, n_samples)
-        centers = gmm.means_                  # (k, n_features)
+        membership = gmm.predict_proba(X).T  # (n_samples, c) -> (c, n_samples)
+        centers = gmm.means_                  # (c, n_features)
         return centers, membership
 
 
@@ -112,14 +112,14 @@ class FuzzyKMedoidsEspecialistEnsembleClassifier(FuzzyEspecialistEnsembleClassif
     that start.
     """
 
-    def _fit_fuzzy_clustering(self, X_T, k, m=None, error=None, max_iter=None):
+    def _fit_fuzzy_clustering(self, X_T, c, m=None, error=None, max_iter=None):
         m = self.fuzzy_m if m is None else m
         error = self.fuzzy_error if error is None else error
         max_iter = self.fuzzy_max_iter if max_iter is None else max_iter
 
         X = X_T.T  # (n_samples, n_features)
         centers, membership, _ = _fuzzy_c_medoids(
-            X, c=k, m=m, error=error, max_iter=max_iter, random_state=self.random_state
+            X, c=c, m=m, error=error, max_iter=max_iter, random_state=self.random_state
         )
         return centers, membership
 
@@ -173,7 +173,7 @@ class PossibilisticCMeansEspecialistEnsembleClassifier(FuzzyEspecialistEnsembleC
 
     Worth knowing before using this one: PCM's typicalities deliberately
     don't sum to 1 across clusters for a point, which is exactly what makes
-    it more robust to noise/outliers -- but it also means the k-selection
+    it more robust to noise/outliers -- but it also means the c-selection
     metrics that assume a normalized partition (FPC, MPC, FPE in
     FuzzyClusteringMetrics) are less meaningful here than the hard-label-
     based ones (Silhouette, Calinski-Harabasz, Davies-Bouldin, the elbow
@@ -183,13 +183,13 @@ class PossibilisticCMeansEspecialistEnsembleClassifier(FuzzyEspecialistEnsembleC
     re-tuning for PCM's typicality scale.
     """
 
-    def _fit_fuzzy_clustering(self, X_T, k, m=None, error=None, max_iter=None):
+    def _fit_fuzzy_clustering(self, X_T, c, m=None, error=None, max_iter=None):
         m = self.fuzzy_m if m is None else m
         error = self.fuzzy_error if error is None else error
         max_iter = self.fuzzy_max_iter if max_iter is None else max_iter
 
         centers, typicality = _possibilistic_cmeans(
-            X_T, c=k, m=m, error=error, max_iter=max_iter, random_state=self.random_state
+            X_T, c=c, m=m, error=error, max_iter=max_iter, random_state=self.random_state
         )
         return centers, typicality
 
@@ -237,12 +237,12 @@ class FCM_PFCVEspecialistEnsembleClassifier(FuzzyEspecialistEnsembleClassifier):
     TODO
     """
 
-    def _fit_fuzzy_clustering(self, X_T, k, m=None, error=None, max_iter=None):
+    def _fit_fuzzy_clustering(self, X_T, c, m=None, error=None, max_iter=None):
         m = self.fuzzy_m if m is None else m
         error = self.fuzzy_error if error is None else error
         max_iter = self.fuzzy_max_iter if max_iter is None else max_iter
 
         centers, typicality = _possibilistic_cmeans(
-            X_T, c=k, m=m, error=error, max_iter=max_iter, random_state=self.random_state
+            X_T, c=c, m=m, error=error, max_iter=max_iter, random_state=self.random_state
         )
         return centers, typicality
