@@ -36,7 +36,9 @@ from sklearn.model_selection import StratifiedKFold
 
 from src.Base_Model import FuzzyEspecialistEnsembleClassifier
 from src.model_variants.Changes_Clustering_Algorithm import (
+    FCM_PFCVEspecialistEnsembleClassifier,
     FuzzyKMedoidsEspecialistEnsembleClassifier,
+    GKEspecialistEnsembleClassifier,
     GMMEspecialistEnsembleClassifier,
     PossibilisticCMeansEspecialistEnsembleClassifier,
 )
@@ -68,24 +70,33 @@ DEFAULT_N_DATASETS = 10
 MODEL_REGISTRY = {
     # Main model.
     "FuzzyEspecialistEnsembleClassifier": lambda random_state: FuzzyEspecialistEnsembleClassifier(random_state=random_state),
-    "Suggested_c": lambda random_state: FuzzyEspecialistEnsembleClassifier(random_state=random_state),
-    "c2": lambda random_state: FuzzyEspecialistEnsembleClassifier(random_state=random_state, c_override=2),
-    "c3": lambda random_state: FuzzyEspecialistEnsembleClassifier(random_state=random_state, c_override=3),
-    "c4": lambda random_state: FuzzyEspecialistEnsembleClassifier(random_state=random_state, c_override=4),
-    "c5": lambda random_state: FuzzyEspecialistEnsembleClassifier(random_state=random_state, c_override=5),
-    "c6": lambda random_state: FuzzyEspecialistEnsembleClassifier(random_state=random_state, c_override=6),
-    "c7": lambda random_state: FuzzyEspecialistEnsembleClassifier(random_state=random_state, c_override=7),
-    "c8": lambda random_state: FuzzyEspecialistEnsembleClassifier(random_state=random_state, c_override=8),
-    "c9": lambda random_state: FuzzyEspecialistEnsembleClassifier(random_state=random_state, c_override=9),
-    "c10": lambda random_state: FuzzyEspecialistEnsembleClassifier(random_state=random_state, c_override=10),
+    # "Suggested_c": lambda random_state: FuzzyEspecialistEnsembleClassifier(random_state=random_state),
+    # "c2": lambda random_state: FuzzyEspecialistEnsembleClassifier(random_state=random_state, c_override=2),
+    # "c3": lambda random_state: FuzzyEspecialistEnsembleClassifier(random_state=random_state, c_override=3),
+    # "c4": lambda random_state: FuzzyEspecialistEnsembleClassifier(random_state=random_state, c_override=4),
+    # "c5": lambda random_state: FuzzyEspecialistEnsembleClassifier(random_state=random_state, c_override=5),
+    # "c6": lambda random_state: FuzzyEspecialistEnsembleClassifier(random_state=random_state, c_override=6),
+    # "c7": lambda random_state: FuzzyEspecialistEnsembleClassifier(random_state=random_state, c_override=7),
+    # "c8": lambda random_state: FuzzyEspecialistEnsembleClassifier(random_state=random_state, c_override=8),
+    # "c9": lambda random_state: FuzzyEspecialistEnsembleClassifier(random_state=random_state, c_override=9),
+    # "c10": lambda random_state: FuzzyEspecialistEnsembleClassifier(random_state=random_state, c_override=10),
+    # "Fuzzy_m2_default": lambda random_state: FuzzyEspecialistEnsembleClassifier(random_state=random_state), 
     # "Fuzzy_m1.2": lambda random_state: FuzzyEspecialistEnsembleClassifier(random_state=random_state, fuzzy_m=1.2),
     # "Fuzzy_m1.5": lambda random_state: FuzzyEspecialistEnsembleClassifier(random_state=random_state, fuzzy_m=1.5),
     # "Fuzzy_m2.5": lambda random_state: FuzzyEspecialistEnsembleClassifier(random_state=random_state, fuzzy_m=2.5),
     # "Fuzzy_m3": lambda random_state: FuzzyEspecialistEnsembleClassifier(random_state=random_state, fuzzy_m=3),
     # # Clustering-algorithm / c-selection / base-classifier variants.
-    # "GMMEspecialistEnsembleClassifier": lambda random_state: GMMEspecialistEnsembleClassifier(random_state=random_state),
-    # "FuzzyKMedoidsEspecialistEnsembleClassifier": lambda random_state: FuzzyKMedoidsEspecialistEnsembleClassifier(random_state=random_state),
-    # "PossibilisticCMeansEspecialistEnsembleClassifier": lambda random_state: PossibilisticCMeansEspecialistEnsembleClassifier(random_state=random_state),
+    "GMMEspecialistEnsembleClassifier": lambda random_state: GMMEspecialistEnsembleClassifier(random_state=random_state),
+    "FuzzyKMedoidsEspecialistEnsembleClassifier": lambda random_state: FuzzyKMedoidsEspecialistEnsembleClassifier(random_state=random_state),
+    "PossibilisticCMeansEspecialistEnsembleClassifier": lambda random_state: PossibilisticCMeansEspecialistEnsembleClassifier(random_state=random_state),
+    "FCM_PFCVEspecialistEnsembleClassifier": lambda random_state: FCM_PFCVEspecialistEnsembleClassifier(random_state=random_state),
+    "GKEspecialistEnsembleClassifier": lambda random_state: GKEspecialistEnsembleClassifier(random_state=random_state),
+    # # Clustering methods with the number of clusters fixed (c_override): "<Method>_c<N>".
+    # "GMM_c4": lambda random_state: GMMEspecialistEnsembleClassifier(random_state=random_state, c_override=4),
+    # "FCMdd_c4": lambda random_state: FuzzyKMedoidsEspecialistEnsembleClassifier(random_state=random_state, c_override=4),
+    # "PCM_c4": lambda random_state: PossibilisticCMeansEspecialistEnsembleClassifier(random_state=random_state, c_override=4),
+    # "FCM_PFCV_c4": lambda random_state: FCM_PFCVEspecialistEnsembleClassifier(random_state=random_state, c_override=4),
+    # "GK_c4": lambda random_state: GKEspecialistEnsembleClassifier(random_state=random_state, c_override=4),
     # "FastCSelectionEnsembleClassifier": lambda random_state: FastCSelectionEnsembleClassifier(random_state=random_state),
     # "CVCSelectionEnsembleClassifier": lambda random_state: CVCSelectionEnsembleClassifier(random_state=random_state),
     # "SupervisedEntropyCSelectionEnsembleClassifier": lambda random_state: SupervisedEntropyCSelectionEnsembleClassifier(random_state=random_state),
@@ -93,10 +104,10 @@ MODEL_REGISTRY = {
     # "GapStatisticCSelectionEnsembleClassifier": lambda random_state: GapStatisticCSelectionEnsembleClassifier(random_state=random_state),
     #"PerceptronEspecialistEnsembleClassifier": lambda random_state: PerceptronEspecialistEnsembleClassifier(random_state=random_state),
     # Baselines.
-    # "DecisionTree": lambda random_state: DecisionTreeBaseline(random_state=random_state),
-    # "Bagging": lambda random_state: BaggingBaseline(random_state=random_state),
-    # "Boosting": lambda random_state: BoostingBaseline(random_state=random_state),
-    # "RandomForestBaseline": lambda random_state: RandomForestBaseline(random_state=random_state),
+    "DecisionTree": lambda random_state: DecisionTreeBaseline(random_state=random_state),
+    "Bagging": lambda random_state: BaggingBaseline(random_state=random_state),
+    "Boosting": lambda random_state: BoostingBaseline(random_state=random_state),
+    "RandomForestBaseline": lambda random_state: RandomForestBaseline(random_state=random_state),
 }
 
 
