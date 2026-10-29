@@ -194,47 +194,75 @@ class PossibilisticCMeansEspecialistEnsembleClassifier(FuzzyEspecialistEnsembleC
         return centers, typicality
 
 
+# 4. FCM-PFCV (fuzzy c-means with a single adaptive quadratic distance defined
+#    by a pooled fuzzy covariance matrix)
+def _fcm_pfcv(X_T, c, m=2, error=0.005, max_iter=1000, random_state=None):
+    """
+    FCM-PFCV of de Carvalho et al. (2006, Fuzzy Sets and Systems 157, sec. 3.1.1).
 
-# 2. Fuzzy c-medoids (cluster prototypes are real data points, not means)
-    def _fcm_pfcv(X, c, m=2, error=0.005, max_iter=1000, random_state=None):
-        """
-        TODO
-        """
-        n_samples = X.shape[0]
-        rng = np.random.default_rng(random_state)
+    Fuzzy c-means where the distance is d_M^2(x, g) = (x - g)^T M (x - g), with
+    one matrix M shared by every cluster. Each iteration:
+        1. prototypes (Eq. 3):  g_i = sum_k u_ik^m x_k / sum_k u_ik^m
+        2. matrix M   (Eq. 7):  Q = sum_i sum_k u_ik^m (x_k - g_i)(x_k - g_i)^T
+                                M = det(Q)^(1/p) Q^-1          (so det(M) = 1)
+        3. membership (Eq. 8):  u_ik = [sum_h (d_M^2(x_k, g_i) / d_M^2(x_k, g_h))^(1/(m-1))]^-1
+    and stops when |J(t) - J(t-1)| <= error, with J = sum u_ik^m d_M^2(x_k, g_i),
+    or after `max_iter` iterations. `error` is therefore a tolerance on J (the
+    paper's criterion), not on the membership shift like the other variants.
 
-        dist_matrix = cdist(X, X, metric='euclidean')
-        medoid_idx = rng.choice(n_samples, size=c, replace=False)
+    The initial membership is random (seeded by `random_state`). det(Q) goes
+    through `slogdet` to avoid under/overflow, and Q gets a tiny ridge so a
+    singular Q (redundant or constant features) can still be inverted.
 
-        u = np.full((c, n_samples), 1.0 / c)
-        power = 2.0 / (m - 1)
+    Returns (centers, membership):
+        centers:    ndarray, shape (c, n_features)
+        membership: ndarray, shape (c, n_samples), columns sum to 1
+    """
+    X = X_T.T  # (n_samples, n_features)
+    n_samples, p = X.shape
+    rng = np.random.default_rng(random_state)
 
-        for _ in range(max_iter):
-            d = np.fmax(dist_matrix[medoid_idx], 1e-10)  # (c, n_samples)
-            inv_d = d ** (-power)
-            u_new = inv_d / inv_d.sum(axis=0, keepdims=True)
+    u = rng.random((c, n_samples)) + 1e-3
+    u /= u.sum(axis=0, keepdims=True)
 
-            # Pick, for each cluster, the candidate point minimizing the
-            # membership-weighted sum of distances to every other point.
-            weights = u_new ** m
-            costs = weights @ dist_matrix  # (c, n_samples); dist_matrix is symmetric
-            new_medoid_idx = np.argmin(costs, axis=1)
+    exponent = 1.0 / (m - 1)
+    j_prev = np.inf
 
-            shift = np.max(np.abs(u_new - u))
-            u = u_new
-            medoids_changed = not np.array_equal(new_medoid_idx, medoid_idx)
-            medoid_idx = new_medoid_idx
+    for _ in range(max_iter):
+        w = u ** m
+        centers = (w @ X) / w.sum(axis=1, keepdims=True)  # (c, p)
 
-            if shift < error and not medoids_changed:
-                break
+        diff = X[None, :, :] - centers[:, None, :]  # (c, n_samples, p)
+        Q = np.einsum('ik,ikp,ikq->pq', w, diff, diff)
+        Q += np.eye(p) * (1e-10 * np.trace(Q) / p)
+        _, logdet = np.linalg.slogdet(Q)
+        M = np.exp(logdet / p) * np.linalg.inv(Q)
 
-        centers = X[medoid_idx]
-        return centers, u, medoid_idx
+        d_sq = np.fmax(np.einsum('ikp,pq,ikq->ik', diff, M, diff), 1e-10)  # (c, n_samples)
+        inv_d = d_sq ** (-exponent)
+        u = inv_d / inv_d.sum(axis=0, keepdims=True)
+
+        j = float(((u ** m) * d_sq).sum())
+        if abs(j_prev - j) <= error:
+            break
+        j_prev = j
+
+    # Prototypes consistent with the final membership.
+    w = u ** m
+    centers = (w @ X) / w.sum(axis=1, keepdims=True)
+    return centers, u
 
 
 class FCM_PFCVEspecialistEnsembleClassifier(FuzzyEspecialistEnsembleClassifier):
     """
-    TODO
+    Replaces fuzzy c-means with FCM-PFCV (see `_fcm_pfcv`): the clustering uses
+    one adaptive quadratic distance shared by all clusters, learned from the
+    pooled fuzzy covariance of the data. `fuzzy_m` is the fuzziness exponent
+    and `fuzzy_error` the tolerance on the change of the criterion J.
+
+    Only the clustering step uses the matrix M. The c-selection metrics and
+    the cluster weights at inference time keep using the Euclidean distance
+    to the prototypes, as in the base model.
     """
 
     def _fit_fuzzy_clustering(self, X_T, c, m=None, error=None, max_iter=None):
@@ -242,7 +270,7 @@ class FCM_PFCVEspecialistEnsembleClassifier(FuzzyEspecialistEnsembleClassifier):
         error = self.fuzzy_error if error is None else error
         max_iter = self.fuzzy_max_iter if max_iter is None else max_iter
 
-        centers, typicality = _possibilistic_cmeans(
+        centers, membership = _fcm_pfcv(
             X_T, c=c, m=m, error=error, max_iter=max_iter, random_state=self.random_state
         )
-        return centers, typicality
+        return centers, membership
