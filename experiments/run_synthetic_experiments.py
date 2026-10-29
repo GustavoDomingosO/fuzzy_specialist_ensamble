@@ -2,7 +2,8 @@
 Synthetic-data experiment runner.
 
 Each experiment is a YAML file under `tests/` describing a `sklearn.datasets.make_classification` dataset.
-Results are written to `outputs/<experiment_name>/<run_timestamp>/`.
+Each experiment is repeated on several datasets (Monte Carlo: same YAML parameters,
+different seeds). Results are written to `outputs/<experiment_name>/<run_timestamp>/`.
 
 Metrics for now only computes what was asked for -- accuracy
 (mean/std over the folds), and time to train/inference (mean/std over
@@ -56,6 +57,11 @@ from src.baselines.baselines_decision_tree import (
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_TESTS_DIR = PROJECT_ROOT / "tests"
 DEFAULT_OUTPUTS_DIR = PROJECT_ROOT / "outputs"
+
+# Monte Carlo repetitions: how many datasets are generated per experiment
+# (same YAML parameters, different random_state). Override with `n_datasets:`
+# in the YAML or --n-datasets on the command line.
+DEFAULT_N_DATASETS = 10
 
 # Every model available to an experiment config's `models:` list, keyed by the
 # name used in the YAML.
@@ -165,8 +171,12 @@ def apply_augmentation(X: np.ndarray, augmentation: dict, random_state: int) -> 
     return X
 
 
-def build_dataset(config: dict):
+def build_dataset(config: dict, random_state: int = None):
+    """`random_state` overrides the YAML's dataset seed (used to draw the
+    Monte Carlo repetitions)."""
     dataset_params = dict(config["dataset"])  # copy -- make_classification mutates nothing, but be safe
+    if random_state is not None:
+        dataset_params["random_state"] = random_state
     random_state = dataset_params.get("random_state", 42)
     X, y = make_classification(**dataset_params)
 
@@ -262,19 +272,22 @@ def run_one_model(model_name: str, X, y, skf: StratifiedKFold, random_state: int
     }
 
 
-def run_experiment(config_path: Path, outputs_dir: Path) -> pd.DataFrame:
+def run_experiment(config_path: Path, outputs_dir: Path, n_datasets: int = None) -> pd.DataFrame:
+    """Runs the experiment on `n_datasets` Monte Carlo datasets: same YAML
+    parameters, dataset seed = base seed + i. Writes `results.csv` (one row per
+    model per dataset) and `results_summary.csv` (mean/std across datasets)."""
     config = load_experiment_config(config_path)
     experiment_name = config["name"]
 
-    print(f"\nExperiment: {experiment_name} ({config_path.name}) ===")
+    if n_datasets is None:
+        n_datasets = config.get("n_datasets", DEFAULT_N_DATASETS)
 
-    X, y = build_dataset(config)
+    print(f"\nExperiment: {experiment_name} ({config_path.name}) -- {n_datasets} dataset(s) ===")
 
     cv_config = config.get("cv", {})
     n_splits = cv_config.get("n_splits", 5)
-    random_state = cv_config.get("random_state", config["dataset"].get("random_state", 42))
-
-    skf = StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=random_state)
+    base_dataset_seed = config["dataset"].get("random_state", 42)
+    base_cv_seed = cv_config.get("random_state", base_dataset_seed)
 
     model_names = resolve_model_names(config)
     unknown = [m for m in model_names if m not in MODEL_REGISTRY]
@@ -300,26 +313,55 @@ def run_experiment(config_path: Path, outputs_dir: Path) -> pd.DataFrame:
             mlflow.log_params({
                 "experiment_name": experiment_name,
                 "n_splits": n_splits,
-                "cv_random_state": random_state,
+                "n_datasets": n_datasets,
+                "cv_random_state": base_cv_seed,
                 **{f"dataset.{k}": v for k, v in config["dataset"].items()},
                 **{f"augmentation.{k}": v for k, v in config.get("augmentation", {}).items()},
             })
 
-        for model_name in model_names:
-            print(f" Running {model_name} ({n_splits}-fold CV)...")
+        for dataset_idx in range(n_datasets):
+            dataset_seed = base_dataset_seed + dataset_idx
+            cv_seed = base_cv_seed + dataset_idx
+            print(f"\n Dataset {dataset_idx + 1}/{n_datasets} (seed={dataset_seed})")
 
-            if use_mlflow:
-                with mlflow.start_run(run_name=model_name, nested=True):
-                    param_probe = MODEL_REGISTRY[model_name](random_state)
-                    if hasattr(param_probe, "get_params"):
-                        mlflow.log_params(param_probe.get_params())
-                    summary = run_one_model(model_name, X, y, skf, random_state)
-                    mlflow.log_metrics({k: v for k, v in summary.items() if isinstance(v, (int, float))})
-                    results.append(summary)
-            else:
-                results.append(run_one_model(model_name, X, y, skf, random_state))
+            X, y = build_dataset(config, random_state=dataset_seed)
+            skf = StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=cv_seed)
+
+            dataset_cm = (
+                mlflow.start_run(run_name=f"dataset_{dataset_idx}", nested=True)
+                if use_mlflow else contextlib.nullcontext()
+            )
+            with dataset_cm:
+                if use_mlflow:
+                    mlflow.log_params({"dataset_idx": dataset_idx, "dataset_seed": dataset_seed})
+
+                for model_name in model_names:
+                    print(f" Running {model_name} ({n_splits}-fold CV)...")
+
+                    if use_mlflow:
+                        with mlflow.start_run(run_name=model_name, nested=True):
+                            param_probe = MODEL_REGISTRY[model_name](cv_seed)
+                            if hasattr(param_probe, "get_params"):
+                                mlflow.log_params(param_probe.get_params())
+                            summary = run_one_model(model_name, X, y, skf, cv_seed)
+                            mlflow.log_metrics({k: v for k, v in summary.items() if isinstance(v, (int, float))})
+                    else:
+                        summary = run_one_model(model_name, X, y, skf, cv_seed)
+
+                    results.append({"dataset_idx": dataset_idx, "dataset_seed": dataset_seed, **summary})
 
     results_df = pd.DataFrame(results)
+
+    # Mean/std across the datasets, per model. Each dataset contributes its
+    # own CV mean, so the std reflects dataset-to-dataset variation.
+    metric_cols = [c for c in results_df.columns
+                   if c.endswith("_mean") or c.endswith("_mean_s")]
+    summary_df = (
+        results_df.groupby("model", sort=False)[metric_cols]
+        .agg(["mean", "std"])
+    )
+    summary_df.columns = [f"{col}_across_datasets_{stat}" for col, stat in summary_df.columns]
+    summary_df = summary_df.reset_index()
 
     run_timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     run_dir = outputs_dir / experiment_name / run_timestamp
@@ -327,13 +369,15 @@ def run_experiment(config_path: Path, outputs_dir: Path) -> pd.DataFrame:
 
     results_path = run_dir / "results.csv"
     results_df.to_csv(results_path, index=False)
+    summary_df.to_csv(run_dir / "results_summary.csv", index=False)
 
     # Copy the resolved config alongside the results for reproducibility.
     with open(run_dir / "config_used.yaml", "w") as f:
-        yaml.safe_dump(config, f, sort_keys=False)
+        yaml.safe_dump({**config, "n_datasets": n_datasets}, f, sort_keys=False)
 
     print(f"\n Results written to: {results_path}")
-    print(results_df.to_string(index=False))
+    print(summary_df[["model", "accuracy_mean_across_datasets_mean",
+                      "accuracy_mean_across_datasets_std"]].to_string(index=False))
 
     return results_df
 
@@ -353,6 +397,12 @@ def main():
         "--sweep", action="store_true",
         help="Run every *.yaml/*.yml experiment file found under --tests-dir "
              "instead of a single --config. An explicit opt-in.",
+    )
+    parser.add_argument(
+        "--n-datasets", type=int, default=None,
+        help="Monte Carlo repetitions: number of datasets generated per "
+             "experiment (seed = YAML seed + i). Defaults to `n_datasets` in "
+             f"the YAML, else {DEFAULT_N_DATASETS}.",
     )
     parser.add_argument("--tests-dir", type=Path, default=DEFAULT_TESTS_DIR)
     parser.add_argument("--outputs-dir", type=Path, default=DEFAULT_OUTPUTS_DIR)
@@ -376,7 +426,7 @@ def main():
         config_paths = [args.config]
 
     for config_path in config_paths:
-        run_experiment(config_path, args.outputs_dir)
+        run_experiment(config_path, args.outputs_dir, args.n_datasets)
 
 
 if __name__ == "__main__":
