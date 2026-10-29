@@ -2,7 +2,7 @@
 # augmentation section (skew, outliers, scale) ported from
 # interactive_make_classification_full.py.
 
-name: feature_imbalance
+name: 1_2_feature_imbalance
 description: "Feature scale imbalance: only two features multiplied by 1e4. Everything else identical to control.yaml."
 
 dataset:

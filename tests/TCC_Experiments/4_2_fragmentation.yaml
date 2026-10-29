@@ -2,7 +2,7 @@
 # augmentation section (skew, outliers, scale) ported from
 # interactive_make_classification_full.py.
 
-name: cluster_quantity/10
+name: 4_2_fragmentation
 description: "Fragmentation: n_clusters_per_class = 10. Everything else identical to control.yaml."
 
 dataset:
